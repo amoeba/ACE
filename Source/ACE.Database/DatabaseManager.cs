@@ -25,6 +25,12 @@ namespace ACE.Database
 
         public static void Initialize(bool autoRetry = true)
         {
+            // For SQLite there is no Program_Setup provisioning step, so create and
+            // populate the database files here if they are missing. No-op for MySQL,
+            // which Program_Setup provisions separately, and a no-op once the files
+            // exist, so calling it from both places is harmless.
+            SqliteBootstrapper.EnsureDatabases();
+
             Authentication.Exists(true);
 
             if (Authentication.GetListofAccountsByAccessLevel(ACE.Entity.Enum.AccessLevel.Admin).Count == 0)
@@ -58,6 +64,28 @@ namespace ACE.Database
             Shard = serializedShardDb;
 
             shardDb.Exists(true);
+
+            if (DbProvider.IsSqlite && !SqliteBootstrapper.ValidateWorldDatabase(DbProvider.ResolveSqlitePath(DatabaseKind.World)))
+                InitializationFailure = true;
+        }
+
+        /// <summary>
+        /// Provider-neutral description of a database target, for log messages that
+        /// previously assumed a MySQL host/port pair.
+        /// </summary>
+        public static string DescribeTarget(DatabaseKind kind)
+        {
+            if (DbProvider.IsSqlite)
+                return DbProvider.ResolveSqlitePath(kind);
+
+            var cfg = kind switch
+            {
+                DatabaseKind.Authentication => Common.ConfigManager.Config.MySql.Authentication,
+                DatabaseKind.Shard         => Common.ConfigManager.Config.MySql.Shard,
+                _                          => Common.ConfigManager.Config.MySql.World
+            };
+
+            return $"{cfg.Database} on {cfg.Host}:{cfg.Port}";
         }
 
         public static bool AutoPromoteNextAccountToAdmin { get; set; }

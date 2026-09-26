@@ -154,6 +154,12 @@ namespace ACE.Server
             log.Info("Initializing ConfigManager...");
             ConfigManager.Initialize();
 
+            // The provider is only known once ConfigManager has run. Materialise the
+            // SQLite files here, ahead of the offline maintenance block below, which
+            // queries the shard schema before DatabaseManager.Initialize() is reached.
+            // No-op when the provider is MySQL.
+            ACE.Database.SqliteBootstrapper.EnsureDatabases();
+
             log.Info("Initializing ModManager...");
             ModManager.Initialize();
 
@@ -203,7 +209,25 @@ namespace ACE.Server
             else
                 log.Info($"AutoServerVersionCheck is disabled...");
 
-            if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase)
+            // The world-database auto-updater, the world-customization runner and the
+            // migration runner all speak raw MySQL: they download a mysqldump from
+            // ACE-World-16PY-Patches and replay DatabaseSetupScripts/*.sql through
+            // MySqlConnector. None of that applies to the SQLite backend, which instead
+            // materialises its schema from the EF model and takes the world database as
+            // a pre-converted file (see ACE.Database.SqliteBootstrapper).
+            var providerIsSqlite = ACE.Database.DbProvider.IsSqlite;
+
+            if (providerIsSqlite)
+            {
+                log.Info("Database provider is SQLite. This is intended for local development and");
+                log.Info("private test worlds; MySQL remains the supported target for public shards.");
+                log.Info("The automatic database update and world database update pipelines are MySQL-only");
+                log.Info("and are being skipped, so this world will not receive schema or data patches as");
+                log.Info("ACE is upgraded. There is also no replication or point-in-time recovery.");
+                log.Info("Skipping MySQL world/database patch pipeline.");
+            }
+
+            if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase && !providerIsSqlite)
             {
                 CheckForWorldDatabaseUpdate();
 
@@ -213,7 +237,7 @@ namespace ACE.Server
             else
                 log.Info($"AutoUpdateWorldDatabase is disabled...");
 
-            if (ConfigManager.Config.Offline.AutoApplyDatabaseUpdates)
+            if (ConfigManager.Config.Offline.AutoApplyDatabaseUpdates && !providerIsSqlite)
                 AutoApplyDatabaseUpdates();
             else
                 log.Info($"AutoApplyDatabaseUpdates is disabled...");

@@ -180,6 +180,52 @@
       "EnableSensitiveDataLogging": false
     }
   },
+  // Which database backend to use.
+  //
+  // "mysql" (the default) is the supported target for public and private shards.
+  // It uses the MySql section above and behaves exactly as it always has.
+  //
+  // "sqlite" is an optional alternative intended for local development and
+  // private test worlds. It needs no database server, which makes it convenient
+  // for working on ACE itself, but it is not a supported substitute for MySQL on
+  // a shard players care about. Specifically, on SQLite:
+  //
+  //   - the automatic database update and world database update pipelines are
+  //     skipped, so a long-running world will drift behind the MySql scripts in
+  //     Database/Updates as ACE is upgraded;
+  //   - there is no replication and no point-in-time recovery;
+  //   - the world database is a pre-converted artifact, not one built from the
+  //     .dat files, so it can lag the first-party world release.
+  //
+  // Those are reasons to use MySQL for anything public, not performance reasons.
+  //
+  // Paths are resolved relative to the working directory when not absolute, and
+  // must end in .db.
+  //
+  // On first run with provider "sqlite", ACE creates the auth and shard schemas
+  // from its own EF model and downloads the world database (about 130MB) from
+  // WorldDatabaseUrl. Set the url to "" to supply your own ace_world.db.
+  "Database": {
+    "Provider": "mysql",
+    // On startup, create the auth and shard schemas and fetch the world database
+    // if the files are missing. Set to false to manage the files yourself.
+    "AutoCreate": true
+  },
+  // Only read when Provider is "sqlite".
+  "Sqlite": {
+    "Authentication": {
+      "Database": "db/ace_auth.db"
+    },
+    "Shard": {
+      "Database": "db/ace_shard.db"
+    },
+    "World": {
+      "Database": "db/ace_world.db",
+      // Pre-converted SQLite world database, produced by amoeba/ace-to-sqlite.
+      // Set to "" to supply your own ace_world.db instead.
+      "WorldDatabaseUrl": "https://github.com/amoeba/ace-to-sqlite/releases/download/latest/ace_world_patches.db"
+    }
+  },
   // This section can trigger events that may happen before the world starts up, or after it shuts down
   // The shard should be in a disconnected state from any running ACE world
   "Offline": {

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
-using Pomelo.EntityFrameworkCore.MySql.Scaffolding.Internal;
 
 namespace ACE.Database.Models.World;
 
@@ -128,34 +127,17 @@ public partial class WorldDbContext : DbContext
     {
         if (!optionsBuilder.IsConfigured)
         {
-            var config = Common.ConfigManager.Config.MySql.World;
-
-            var connectionString = $"server={config.Host};port={config.Port};user={config.Username};password={config.Password};database={config.Database};{config.ConnectionOptions}";
-
-            optionsBuilder.UseMySql(connectionString, DatabaseManager.CachedServerVersionAutoDetect(config.Database, connectionString), builder =>
-            {
-                builder.EnableRetryOnFailure(10);
-            });
-
-            if (config.EnableDetailedErrors)
-                optionsBuilder.EnableDetailedErrors();
-
-            if (config.EnableSensitiveDataLogging)
-                optionsBuilder.EnableSensitiveDataLogging();
+            ACE.Database.DbProvider.Configure(optionsBuilder, ACE.Database.DatabaseKind.World);
         }
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder
-            .UseCollation("utf8_general_ci")
-            .HasCharSet("utf8mb3");
-
         modelBuilder.Entity<CookBook>(entity =>
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("cook_book", tb => tb.HasComment("Cook Book for Recipes"));
+            entity.ToTable("cook_book");
 
             entity.HasIndex(e => new { e.RecipeId, e.SourceWCID, e.TargetWCID }, "recipe_source_target_uidx").IsUnique();
 
@@ -164,7 +146,6 @@ public partial class WorldDbContext : DbContext
             entity.HasIndex(e => e.TargetWCID, "target_idx");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this cook book instance")
                 .HasColumnName("id");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -172,13 +153,10 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("datetime")
                 .HasColumnName("last_Modified");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.SourceWCID)
-                .HasComment("Weenie Class Id of the source object for this recipe")
                 .HasColumnName("source_W_C_I_D");
             entity.Property(e => e.TargetWCID)
-                .HasComment("Weenie Class Id of the target object for this recipe")
                 .HasColumnName("target_W_C_I_D");
 
             entity.HasOne(d => d.Recipe).WithMany(p => p.CookBook)
@@ -190,23 +168,19 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("encounter", tb => tb.HasComment("Encounters"));
+            entity.ToTable("encounter");
 
             entity.HasIndex(e => new { e.Landblock, e.CellX, e.CellY }, "landblock_cellx_celly_uidx").IsUnique();
 
             entity.HasIndex(e => e.Landblock, "landblock_idx");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Encounter")
                 .HasColumnName("id");
             entity.Property(e => e.CellX)
-                .HasComment("CellX position of this Encounter")
                 .HasColumnName("cell_X");
             entity.Property(e => e.CellY)
-                .HasComment("CellY position of this Encounter")
                 .HasColumnName("cell_Y");
             entity.Property(e => e.Landblock)
-                .HasComment("Landblock for this Encounter")
                 .HasColumnName("landblock");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -214,7 +188,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("datetime")
                 .HasColumnName("last_Modified");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of generator/object to spawn for Encounter")
                 .HasColumnName("weenie_Class_Id");
         });
 
@@ -222,16 +195,14 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("event", tb => tb.HasComment("Events"));
+            entity.ToTable("event");
 
             entity.HasIndex(e => e.Name, "name_UNIQUE").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Event")
                 .HasColumnName("id");
             entity.Property(e => e.EndTime)
                 .HasDefaultValueSql("'-1'")
-                .HasComment("Unixtime of Event End")
                 .HasColumnName("end_Time");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -240,14 +211,11 @@ public partial class WorldDbContext : DbContext
                 .HasColumnName("last_Modified");
             entity.Property(e => e.Name)
                 .IsRequired()
-                .HasComment("Unique Event of Quest")
                 .HasColumnName("name");
             entity.Property(e => e.StartTime)
                 .HasDefaultValueSql("'-1'")
-                .HasComment("Unixtime of Event Start")
                 .HasColumnName("start_Time");
             entity.Property(e => e.State)
-                .HasComment("State of Event (GameEventState)")
                 .HasColumnName("state");
         });
 
@@ -255,19 +223,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("house_portal", tb => tb.HasComment("House Portal Destinations"));
+            entity.ToTable("house_portal");
 
             entity.HasIndex(e => new { e.HouseId, e.ObjCellId }, "house_Id_UNIQUE").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this House Portal")
                 .HasColumnName("id");
             entity.Property(e => e.AnglesW).HasColumnName("angles_W");
             entity.Property(e => e.AnglesX).HasColumnName("angles_X");
             entity.Property(e => e.AnglesY).HasColumnName("angles_Y");
             entity.Property(e => e.AnglesZ).HasColumnName("angles_Z");
             entity.Property(e => e.HouseId)
-                .HasComment("Unique Id of House")
                 .HasColumnName("house_Id");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -284,19 +250,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Guid).HasName("PRIMARY");
 
-            entity.ToTable("landblock_instance", tb => tb.HasComment("Weenie Instances for each Landblock"));
+            entity.ToTable("landblock_instance");
 
             entity.HasIndex(e => e.Landblock, "instance_landblock_idx");
 
             entity.Property(e => e.Guid)
-                .HasComment("Unique Id of this Instance")
                 .HasColumnName("guid");
             entity.Property(e => e.AnglesW).HasColumnName("angles_W");
             entity.Property(e => e.AnglesX).HasColumnName("angles_X");
             entity.Property(e => e.AnglesY).HasColumnName("angles_Y");
             entity.Property(e => e.AnglesZ).HasColumnName("angles_Z");
             entity.Property(e => e.IsLinkChild)
-                .HasComment("Is this a child link for any other instances?")
                 .HasColumnName("is_Link_Child");
             entity.Property(e => e.Landblock)
                 .HasComputedColumnSql("`obj_Cell_Id` >> 16", false)
@@ -311,7 +275,6 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.OriginY).HasColumnName("origin_Y");
             entity.Property(e => e.OriginZ).HasColumnName("origin_Z");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of object to spawn")
                 .HasColumnName("weenie_Class_Id");
         });
 
@@ -319,17 +282,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("landblock_instance_link", tb => tb.HasComment("Weenie Instance Links"));
+            entity.ToTable("landblock_instance_link");
 
             entity.HasIndex(e => e.ChildGuid, "child_idx");
 
             entity.HasIndex(e => new { e.ParentGuid, e.ChildGuid }, "parent_child_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Instance Link")
                 .HasColumnName("id");
             entity.Property(e => e.ChildGuid)
-                .HasComment("GUID of child instance")
                 .HasColumnName("child_GUID");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -337,7 +298,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("datetime")
                 .HasColumnName("last_Modified");
             entity.Property(e => e.ParentGuid)
-                .HasComment("GUID of parent instance")
                 .HasColumnName("parent_GUID");
 
             entity.HasOne(d => d.Parent).WithMany(p => p.LandblockInstanceLink)
@@ -349,14 +309,12 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("points_of_interest", tb => tb.HasComment("Points of Interest for @telepoi command"));
+            entity.ToTable("points_of_interest");
 
             entity.HasIndex(e => e.Name, "name_UNIQUE")
-                .IsUnique()
-                .HasAnnotation("MySql:IndexPrefixLength", new[] { 100 });
+                .IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this POI")
                 .HasColumnName("id");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -365,11 +323,9 @@ public partial class WorldDbContext : DbContext
                 .HasColumnName("last_Modified");
             entity.Property(e => e.Name)
                 .IsRequired()
-                .HasComment("Name for POI")
                 .HasColumnType("text")
                 .HasColumnName("name");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of portal weenie to reference for destination of POI")
                 .HasColumnName("weenie_Class_Id");
         });
 
@@ -377,12 +333,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("quest", tb => tb.HasComment("Quests"));
+            entity.ToTable("quest");
 
             entity.HasIndex(e => e.Name, "name_UNIQUE").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Quest")
                 .HasColumnName("id");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -390,18 +345,14 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("datetime")
                 .HasColumnName("last_Modified");
             entity.Property(e => e.MaxSolves)
-                .HasComment("Maximum number of times Quest can be completed")
                 .HasColumnName("max_Solves");
             entity.Property(e => e.Message)
-                .HasComment("Quest solved text - unused?")
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.MinDelta)
-                .HasComment("Minimum time between Quest completions")
                 .HasColumnName("min_Delta");
             entity.Property(e => e.Name)
                 .IsRequired()
-                .HasComment("Unique Name of Quest")
                 .HasColumnName("name");
         });
 
@@ -409,16 +360,14 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe", tb => tb.HasComment("Recipes"));
+            entity.ToTable("recipe");
 
             entity.Property(e => e.Id)
                 .ValueGeneratedNever()
-                .HasComment("Unique Id of this Recipe")
                 .HasColumnName("id");
             entity.Property(e => e.DataId).HasColumnName("data_Id");
             entity.Property(e => e.Difficulty).HasColumnName("difficulty");
             entity.Property(e => e.FailAmount)
-                .HasComment("Amount of objects to create upon failing application of this recipe")
                 .HasColumnName("fail_Amount");
             entity.Property(e => e.FailDestroySourceAmount).HasColumnName("fail_Destroy_Source_Amount");
             entity.Property(e => e.FailDestroySourceChance).HasColumnName("fail_Destroy_Source_Chance");
@@ -434,7 +383,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("fail_Message");
             entity.Property(e => e.FailWCID)
-                .HasComment("Weenie Class Id of object to create upon failing application of this recipe")
                 .HasColumnName("fail_W_C_I_D");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -444,7 +392,6 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.SalvageType).HasColumnName("salvage_Type");
             entity.Property(e => e.Skill).HasColumnName("skill");
             entity.Property(e => e.SuccessAmount)
-                .HasComment("Amount of objects to create upon successful application of this recipe")
                 .HasColumnName("success_Amount");
             entity.Property(e => e.SuccessDestroySourceAmount).HasColumnName("success_Destroy_Source_Amount");
             entity.Property(e => e.SuccessDestroySourceChance).HasColumnName("success_Destroy_Source_Chance");
@@ -460,7 +407,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("success_Message");
             entity.Property(e => e.SuccessWCID)
-                .HasComment("Weenie Class Id of object to create upon successful application of this recipe")
                 .HasColumnName("success_W_C_I_D");
             entity.Property(e => e.Unknown1).HasColumnName("unknown_1");
         });
@@ -469,12 +415,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mod", tb => tb.HasComment("Recipe Mods"));
+            entity.ToTable("recipe_mod");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_Mod");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.DataId).HasColumnName("data_Id");
             entity.Property(e => e.ExecutesOnSuccess).HasColumnName("executes_On_Success");
@@ -482,7 +427,6 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.InstanceId).HasColumnName("instance_Id");
             entity.Property(e => e.Mana).HasColumnName("mana");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stamina).HasColumnName("stamina");
             entity.Property(e => e.Unknown7).HasColumnName("unknown_7");
@@ -497,17 +441,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mods_bool", tb => tb.HasComment("Recipe Bool Mods"));
+            entity.ToTable("recipe_mods_bool");
 
             entity.HasIndex(e => e.RecipeModId, "recipeId_mod_bool");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.RecipeModId)
-                .HasComment("Unique Id of Recipe Mod")
                 .HasColumnName("recipe_Mod_Id");
             entity.Property(e => e.Source).HasColumnName("source");
             entity.Property(e => e.Stat).HasColumnName("stat");
@@ -522,17 +464,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mods_d_i_d", tb => tb.HasComment("Recipe DID Mods"));
+            entity.ToTable("recipe_mods_d_i_d");
 
             entity.HasIndex(e => e.RecipeModId, "recipeId_mod_did");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.RecipeModId)
-                .HasComment("Unique Id of Recipe Mod")
                 .HasColumnName("recipe_Mod_Id");
             entity.Property(e => e.Source).HasColumnName("source");
             entity.Property(e => e.Stat).HasColumnName("stat");
@@ -547,17 +487,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mods_float", tb => tb.HasComment("Recipe Float Mods"));
+            entity.ToTable("recipe_mods_float");
 
             entity.HasIndex(e => e.RecipeModId, "recipeId_mod_float");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.RecipeModId)
-                .HasComment("Unique Id of Recipe Mod")
                 .HasColumnName("recipe_Mod_Id");
             entity.Property(e => e.Source).HasColumnName("source");
             entity.Property(e => e.Stat).HasColumnName("stat");
@@ -572,17 +510,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mods_i_i_d", tb => tb.HasComment("Recipe IID Mods"));
+            entity.ToTable("recipe_mods_i_i_d");
 
             entity.HasIndex(e => e.RecipeModId, "recipeId_mod_iid");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.RecipeModId)
-                .HasComment("Unique Id of Recipe Mod")
                 .HasColumnName("recipe_Mod_Id");
             entity.Property(e => e.Source).HasColumnName("source");
             entity.Property(e => e.Stat).HasColumnName("stat");
@@ -597,17 +533,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mods_int", tb => tb.HasComment("Recipe Int Mods"));
+            entity.ToTable("recipe_mods_int");
 
             entity.HasIndex(e => e.RecipeModId, "recipeId_mod_int");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.RecipeModId)
-                .HasComment("Unique Id of Recipe Mod")
                 .HasColumnName("recipe_Mod_Id");
             entity.Property(e => e.Source).HasColumnName("source");
             entity.Property(e => e.Stat).HasColumnName("stat");
@@ -622,17 +556,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_mods_string", tb => tb.HasComment("Recipe String Mods"));
+            entity.ToTable("recipe_mods_string");
 
             entity.HasIndex(e => e.RecipeModId, "recipeId_mod_string");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Mod instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.RecipeModId)
-                .HasComment("Unique Id of Recipe Mod")
                 .HasColumnName("recipe_Mod_Id");
             entity.Property(e => e.Source).HasColumnName("source");
             entity.Property(e => e.Stat).HasColumnName("stat");
@@ -649,12 +581,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_requirements_bool", tb => tb.HasComment("Recipe Bool Requirments"));
+            entity.ToTable("recipe_requirements_bool");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_req_bool");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Requirement instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
@@ -662,7 +593,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.Value).HasColumnName("value");
@@ -676,12 +606,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_requirements_d_i_d", tb => tb.HasComment("Recipe DID Requirments"));
+            entity.ToTable("recipe_requirements_d_i_d");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_req_did");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Requirement instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
@@ -689,7 +618,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.Value).HasColumnName("value");
@@ -703,12 +631,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_requirements_float", tb => tb.HasComment("Recipe Float Requirments"));
+            entity.ToTable("recipe_requirements_float");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_req_float");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Requirement instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
@@ -716,7 +643,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.Value).HasColumnName("value");
@@ -730,12 +656,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_requirements_i_i_d", tb => tb.HasComment("Recipe IID Requirments"));
+            entity.ToTable("recipe_requirements_i_i_d");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_req_iid");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Requirement instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
@@ -743,7 +668,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.Value).HasColumnName("value");
@@ -757,12 +681,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_requirements_int", tb => tb.HasComment("Recipe Int Requirments"));
+            entity.ToTable("recipe_requirements_int");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_req_int");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Requirement instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
@@ -770,7 +693,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.Value).HasColumnName("value");
@@ -784,12 +706,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("recipe_requirements_string", tb => tb.HasComment("Recipe String Requirments"));
+            entity.ToTable("recipe_requirements_string");
 
             entity.HasIndex(e => e.RecipeId, "recipeId_req_string");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Recipe Requirement instance")
                 .HasColumnName("id");
             entity.Property(e => e.Enum).HasColumnName("enum");
             entity.Property(e => e.Index).HasColumnName("index");
@@ -797,7 +718,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("text")
                 .HasColumnName("message");
             entity.Property(e => e.RecipeId)
-                .HasComment("Unique Id of Recipe")
                 .HasColumnName("recipe_Id");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.Value)
@@ -813,11 +733,10 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("spell", tb => tb.HasComment("Spell Table Extended Data"));
+            entity.ToTable("spell");
 
             entity.Property(e => e.Id)
                 .ValueGeneratedNever()
-                .HasComment("Unique Id of this Spell")
                 .HasColumnName("id");
             entity.Property(e => e.Align).HasColumnName("align");
             entity.Property(e => e.BaseIntensity).HasColumnName("base_Intensity");
@@ -897,12 +816,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("treasure_death", tb => tb.HasComment("Death Treasure"));
+            entity.ToTable("treasure_death");
 
             entity.HasIndex(e => e.TreasureType, "treasureType_idx");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Treasure")
                 .HasColumnName("id");
             entity.Property(e => e.ItemChance).HasColumnName("item_Chance");
             entity.Property(e => e.ItemMaxAmount).HasColumnName("item_Max_Amount");
@@ -924,7 +842,6 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.MundaneItemTypeSelectionChances).HasColumnName("mundane_Item_Type_Selection_Chances");
             entity.Property(e => e.Tier).HasColumnName("tier");
             entity.Property(e => e.TreasureType)
-                .HasComment("Type of Treasure for this instance")
                 .HasColumnName("treasure_Type");
             entity.Property(e => e.UnknownChances).HasColumnName("unknown_Chances");
         });
@@ -934,9 +851,7 @@ public partial class WorldDbContext : DbContext
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
             entity
-                .ToTable("treasure_gem_count")
-                .HasCharSet("utf16")
-                .UseCollation("utf16_general_ci");
+                .ToTable("treasure_gem_count");
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.Chance).HasColumnName("chance");
@@ -955,14 +870,11 @@ public partial class WorldDbContext : DbContext
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.MaterialCode)
-                .HasComment("Derived from PropertyInt.TsysMutationData")
                 .HasColumnName("material_Code");
             entity.Property(e => e.MaterialId)
-                .HasComment("MaterialType")
                 .HasColumnName("material_Id");
             entity.Property(e => e.Probability).HasColumnName("probability");
             entity.Property(e => e.Tier)
-                .HasComment("Loot Tier")
                 .HasColumnName("tier");
         });
 
@@ -993,14 +905,11 @@ public partial class WorldDbContext : DbContext
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.MaterialGroup)
-                .HasComment("MaterialType Group")
                 .HasColumnName("material_Group");
             entity.Property(e => e.MaterialId)
-                .HasComment("MaterialType")
                 .HasColumnName("material_Id");
             entity.Property(e => e.Probability).HasColumnName("probability");
             entity.Property(e => e.Tier)
-                .HasComment("Loot Tier")
                 .HasColumnName("tier");
         });
 
@@ -1008,12 +917,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("treasure_wielded", tb => tb.HasComment("Wielded Treasure"));
+            entity.ToTable("treasure_wielded");
 
             entity.HasIndex(e => e.TreasureType, "treasureType_idx");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Treasure")
                 .HasColumnName("id");
             entity.Property(e => e.ContinuesPreviousSet).HasColumnName("continues_Previous_Set");
             entity.Property(e => e.HasSubSet).HasColumnName("has_Sub_Set");
@@ -1023,47 +931,34 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("datetime")
                 .HasColumnName("last_Modified");
             entity.Property(e => e.PaletteId)
-                .HasComment("Palette Color of Object Generated")
                 .HasColumnName("palette_Id");
             entity.Property(e => e.Probability).HasColumnName("probability");
             entity.Property(e => e.SetStart).HasColumnName("set_Start");
             entity.Property(e => e.Shade)
-                .HasComment("Shade of Object generated's Palette")
                 .HasColumnName("shade");
             entity.Property(e => e.StackSize)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Stack Size of object to create (-1 = infinite)")
                 .HasColumnName("stack_Size");
             entity.Property(e => e.StackSizeVariance).HasColumnName("stack_Size_Variance");
             entity.Property(e => e.TreasureType)
-                .HasComment("Type of Treasure for this instance")
                 .HasColumnName("treasure_Type");
             entity.Property(e => e.Unknown1)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_1");
             entity.Property(e => e.Unknown10)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_10");
             entity.Property(e => e.Unknown11)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_11");
             entity.Property(e => e.Unknown12)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_12");
             entity.Property(e => e.Unknown3)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_3");
             entity.Property(e => e.Unknown4)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_4");
             entity.Property(e => e.Unknown5)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_5");
             entity.Property(e => e.Unknown9)
-                .HasComment("Always 0 in cache.bin")
                 .HasColumnName("unknown_9");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of Treasure to Generate")
                 .HasColumnName("weenie_Class_Id");
         });
 
@@ -1071,7 +966,7 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("version", tb => tb.HasComment("Version Information"));
+            entity.ToTable("version");
 
             entity.Property(e => e.Id).HasColumnName("id");
             entity.Property(e => e.BaseVersion)
@@ -1091,17 +986,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.ClassId).HasName("PRIMARY");
 
-            entity.ToTable("weenie", tb => tb.HasComment("Weenies"));
+            entity.ToTable("weenie");
 
             entity.HasIndex(e => e.ClassName, "className_UNIQUE").IsUnique();
 
             entity.Property(e => e.ClassId)
-                .HasComment("Weenie Class Id (wcid) / (WCID) / (weenieClassId)")
                 .HasColumnName("class_Id");
             entity.Property(e => e.ClassName)
                 .IsRequired()
                 .HasMaxLength(100)
-                .HasComment("Weenie Class Name (W_????_CLASS)")
                 .HasColumnName("class_Name");
             entity.Property(e => e.LastModified)
                 .ValueGeneratedOnAddOrUpdate()
@@ -1109,7 +1002,6 @@ public partial class WorldDbContext : DbContext
                 .HasColumnType("datetime")
                 .HasColumnName("last_Modified");
             entity.Property(e => e.Type)
-                .HasComment("WeenieType")
                 .HasColumnName("type");
         });
 
@@ -1117,17 +1009,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_anim_part", tb => tb.HasComment("Animation Part Changes (from PCAPs) of Weenies"));
+            entity.ToTable("weenie_properties_anim_part");
 
             entity.HasIndex(e => new { e.ObjectId, e.Index }, "object_Id_index_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.AnimationId).HasColumnName("animation_Id");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesAnimPart)
@@ -1139,27 +1029,21 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_attribute", tb => tb.HasComment("Attribute Properties of Weenies"));
+            entity.ToTable("weenie_properties_attribute");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_attribute_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.CPSpent)
-                .HasComment("XP spent on this attribute")
                 .HasColumnName("c_P_Spent");
             entity.Property(e => e.InitLevel)
-                .HasComment("innate points")
                 .HasColumnName("init_Level");
             entity.Property(e => e.LevelFromCP)
-                .HasComment("points raised")
                 .HasColumnName("level_From_C_P");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyAttribute.????)")
                 .HasColumnName("type");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesAttribute)
@@ -1171,30 +1055,23 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_attribute_2nd", tb => tb.HasComment("Attribute2nd (Vital) Properties of Weenies"));
+            entity.ToTable("weenie_properties_attribute_2nd");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_attribute2nd_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.CPSpent)
-                .HasComment("XP spent on this attribute")
                 .HasColumnName("c_P_Spent");
             entity.Property(e => e.CurrentLevel)
-                .HasComment("current value of the vital")
                 .HasColumnName("current_Level");
             entity.Property(e => e.InitLevel)
-                .HasComment("innate points")
                 .HasColumnName("init_Level");
             entity.Property(e => e.LevelFromCP)
-                .HasComment("points raised")
                 .HasColumnName("level_From_C_P");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyAttribute2nd.????)")
                 .HasColumnName("type");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesAttribute2nd)
@@ -1206,12 +1083,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_body_part", tb => tb.HasComment("Body Part Properties of Weenies"));
+            entity.ToTable("weenie_properties_body_part");
 
             entity.HasIndex(e => new { e.ObjectId, e.Key }, "wcid_bodypart_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ArmorVsAcid).HasColumnName("armor_Vs_Acid");
             entity.Property(e => e.ArmorVsBludgeon).HasColumnName("armor_Vs_Bludgeon");
@@ -1231,7 +1107,6 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.HRB).HasColumnName("h_r_b");
             entity.Property(e => e.HRF).HasColumnName("h_r_f");
             entity.Property(e => e.Key)
-                .HasComment("Type of Property the value applies to (PropertySkill.????)")
                 .HasColumnName("key");
             entity.Property(e => e.LLB).HasColumnName("l_l_b");
             entity.Property(e => e.LLF).HasColumnName("l_l_f");
@@ -1242,7 +1117,6 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.MRB).HasColumnName("m_r_b");
             entity.Property(e => e.MRF).HasColumnName("m_r_f");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesBodyPart)
@@ -1254,23 +1128,19 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_book", tb => tb.HasComment("Book Properties of Weenies"));
+            entity.ToTable("weenie_properties_book");
 
             entity.HasIndex(e => e.ObjectId, "wcid_bookdata_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.MaxNumCharsPerPage)
                 .HasDefaultValueSql("'1000'")
-                .HasComment("Maximum number of characters per page")
                 .HasColumnName("max_Num_Chars_Per_Page");
             entity.Property(e => e.MaxNumPages)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Maximum number of pages per book")
                 .HasColumnName("max_Num_Pages");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
 
             entity.HasOne(d => d.Object).WithOne(p => p.WeeniePropertiesBook)
@@ -1282,40 +1152,32 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_book_page_data", tb => tb.HasComment("Page Properties of Weenies"));
+            entity.ToTable("weenie_properties_book_page_data");
 
             entity.HasIndex(e => new { e.ObjectId, e.PageId }, "wcid_pageid_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.AuthorAccount)
                 .IsRequired()
                 .HasMaxLength(255)
                 .HasDefaultValueSql("'prewritten'")
-                .HasComment("Account Name of the Author of this page")
                 .HasColumnName("author_Account");
             entity.Property(e => e.AuthorId)
-                .HasComment("Id of the Author of this page")
                 .HasColumnName("author_Id");
             entity.Property(e => e.AuthorName)
                 .IsRequired()
                 .HasMaxLength(255)
                 .HasDefaultValueSql("''")
-                .HasComment("Character Name of the Author of this page")
                 .HasColumnName("author_Name");
             entity.Property(e => e.IgnoreAuthor)
-                .HasComment("if this is true, any character in the world can change the page")
                 .HasColumnName("ignore_Author");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the Book object this page belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.PageId)
-                .HasComment("Id of the page number for this page")
                 .HasColumnName("page_Id");
             entity.Property(e => e.PageText)
                 .IsRequired()
-                .HasComment("Text of the Page")
                 .HasColumnType("text")
                 .HasColumnName("page_Text");
 
@@ -1328,21 +1190,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_bool", tb => tb.HasComment("Bool Properties of Weenies"));
+            entity.ToTable("weenie_properties_bool");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_bool_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyBool.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
-                .HasComment("Value of this Property")
                 .HasColumnName("value");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesBool)
@@ -1354,34 +1212,26 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_create_list", tb => tb.HasComment("CreateList Properties of Weenies"));
+            entity.ToTable("weenie_properties_create_list");
 
             entity.HasIndex(e => e.ObjectId, "wcid_createlist");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.DestinationType)
-                .HasComment("Type of Destination the value applies to (DestinationType.????)")
                 .HasColumnName("destination_Type");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Palette)
-                .HasComment("Palette Color of Object")
                 .HasColumnName("palette");
             entity.Property(e => e.Shade)
-                .HasComment("Shade of Object's Palette")
                 .HasColumnName("shade");
             entity.Property(e => e.StackSize)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Stack Size of object to create (-1 = infinite)")
                 .HasColumnName("stack_Size");
             entity.Property(e => e.TryToBond)
-                .HasComment("Unused?")
                 .HasColumnName("try_To_Bond");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of object to Create")
                 .HasColumnName("weenie_Class_Id");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesCreateList)
@@ -1393,21 +1243,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_d_i_d", tb => tb.HasComment("DataID Properties of Weenies"));
+            entity.ToTable("weenie_properties_d_i_d");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_did_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyDataId.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
-                .HasComment("Value of this Property")
                 .HasColumnName("value");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesDID)
@@ -1419,24 +1265,20 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_emote", tb => tb.HasComment("Emote Properties of Weenies"));
+            entity.ToTable("weenie_properties_emote");
 
             entity.HasIndex(e => e.ObjectId, "wcid_emote");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.Category)
-                .HasComment("EmoteCategory")
                 .HasColumnName("category");
             entity.Property(e => e.MaxHealth).HasColumnName("max_Health");
             entity.Property(e => e.MinHealth).HasColumnName("min_Health");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Probability)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Probability of this EmoteSet being chosen")
                 .HasColumnName("probability");
             entity.Property(e => e.Quest)
                 .HasColumnType("text")
@@ -1455,12 +1297,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_emote_action", tb => tb.HasComment("EmoteAction Properties of Weenies"));
+            entity.ToTable("weenie_properties_emote_action");
 
             entity.HasIndex(e => new { e.EmoteId, e.Order }, "emoteid_order_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.Amount).HasColumnName("amount");
             entity.Property(e => e.Amount64).HasColumnName("amount_64");
@@ -1470,18 +1311,14 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.AnglesZ).HasColumnName("angles_Z");
             entity.Property(e => e.Delay)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Time to wait before EmoteAction starts execution")
                 .HasColumnName("delay");
             entity.Property(e => e.DestinationType)
-                .HasComment("Type of Destination the value applies to (DestinationType.????)")
                 .HasColumnName("destination_Type");
             entity.Property(e => e.Display).HasColumnName("display");
             entity.Property(e => e.EmoteId)
-                .HasComment("Id of the emote this property belongs to")
                 .HasColumnName("emote_Id");
             entity.Property(e => e.Extent)
                 .HasDefaultValueSql("'1'")
-                .HasComment("?")
                 .HasColumnName("extent");
             entity.Property(e => e.HeroXP64).HasColumnName("hero_X_P_64");
             entity.Property(e => e.Max).HasColumnName("max");
@@ -1496,23 +1333,19 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.Motion).HasColumnName("motion");
             entity.Property(e => e.ObjCellId).HasColumnName("obj_Cell_Id");
             entity.Property(e => e.Order)
-                .HasComment("Emote Action Sequence Order")
                 .HasColumnName("order");
             entity.Property(e => e.OriginX).HasColumnName("origin_X");
             entity.Property(e => e.OriginY).HasColumnName("origin_Y");
             entity.Property(e => e.OriginZ).HasColumnName("origin_Z");
             entity.Property(e => e.PScript).HasColumnName("p_Script");
             entity.Property(e => e.Palette)
-                .HasComment("Palette Color of Object")
                 .HasColumnName("palette");
             entity.Property(e => e.Percent).HasColumnName("percent");
             entity.Property(e => e.Shade)
-                .HasComment("Shade of Object's Palette")
                 .HasColumnName("shade");
             entity.Property(e => e.Sound).HasColumnName("sound");
             entity.Property(e => e.SpellId).HasColumnName("spell_Id");
             entity.Property(e => e.StackSize)
-                .HasComment("Stack Size of object to create (-1 = infinite)")
                 .HasColumnName("stack_Size");
             entity.Property(e => e.Stat).HasColumnName("stat");
             entity.Property(e => e.TestString)
@@ -1521,14 +1354,11 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.TreasureClass).HasColumnName("treasure_Class");
             entity.Property(e => e.TreasureType).HasColumnName("treasure_Type");
             entity.Property(e => e.TryToBond)
-                .HasComment("Unused?")
                 .HasColumnName("try_To_Bond");
             entity.Property(e => e.Type)
-                .HasComment("EmoteType")
                 .HasColumnName("type");
             entity.Property(e => e.WealthRating).HasColumnName("wealth_Rating");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of object to Create")
                 .HasColumnName("weenie_Class_Id");
 
             entity.HasOne(d => d.Emote).WithMany(p => p.WeeniePropertiesEmoteAction)
@@ -1540,18 +1370,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_event_filter", tb => tb.HasComment("EventFilter Properties of Weenies"));
+            entity.ToTable("weenie_properties_event_filter");
 
             entity.HasIndex(e => new { e.ObjectId, e.Event }, "wcid_eventfilter_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.Event)
-                .HasComment("Id of Event to filter")
                 .HasColumnName("event");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesEventFilter)
@@ -1563,21 +1390,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_float", tb => tb.HasComment("Float Properties of Weenies"));
+            entity.ToTable("weenie_properties_float");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_float_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyFloat.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
-                .HasComment("Value of this Property")
                 .HasColumnName("value");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesFloat)
@@ -1589,57 +1412,46 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_generator", tb => tb.HasComment("Generator Properties of Weenies"));
+            entity.ToTable("weenie_properties_generator");
 
             entity.HasIndex(e => e.ObjectId, "wcid_generator");
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.AnglesW).HasColumnName("angles_W");
             entity.Property(e => e.AnglesX).HasColumnName("angles_X");
             entity.Property(e => e.AnglesY).HasColumnName("angles_Y");
             entity.Property(e => e.AnglesZ).HasColumnName("angles_Z");
             entity.Property(e => e.Delay)
-                .HasComment("Amount of delay before generation")
                 .HasColumnName("delay");
             entity.Property(e => e.InitCreate)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Number of object to generate initially")
                 .HasColumnName("init_Create");
             entity.Property(e => e.MaxCreate)
                 .HasDefaultValueSql("'1'")
-                .HasComment("Maximum amount of objects to generate")
                 .HasColumnName("max_Create");
             entity.Property(e => e.ObjCellId).HasColumnName("obj_Cell_Id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.OriginX).HasColumnName("origin_X");
             entity.Property(e => e.OriginY).HasColumnName("origin_Y");
             entity.Property(e => e.OriginZ).HasColumnName("origin_Z");
             entity.Property(e => e.PaletteId)
-                .HasComment("Palette Color of Object Generated")
                 .HasColumnName("palette_Id");
             entity.Property(e => e.Probability)
                 .HasDefaultValueSql("'1'")
                 .HasColumnName("probability");
             entity.Property(e => e.Shade)
-                .HasComment("Shade of Object generated's Palette")
                 .HasColumnName("shade");
             entity.Property(e => e.StackSize)
-                .HasComment("StackSize of object generated")
                 .HasColumnName("stack_Size");
             entity.Property(e => e.WeenieClassId)
-                .HasComment("Weenie Class Id of object to generate")
                 .HasColumnName("weenie_Class_Id");
             entity.Property(e => e.WhenCreate)
                 .HasDefaultValueSql("'2'")
-                .HasComment("When to generate the weenie object")
                 .HasColumnName("when_Create");
             entity.Property(e => e.WhereCreate)
                 .HasDefaultValueSql("'4'")
-                .HasComment("Where to generate the weenie object")
                 .HasColumnName("where_Create");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesGenerator)
@@ -1651,21 +1463,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_i_i_d", tb => tb.HasComment("InstanceID Properties of Weenies"));
+            entity.ToTable("weenie_properties_i_i_d");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_iid_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyInstanceId.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
-                .HasComment("Value of this Property")
                 .HasColumnName("value");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesIID)
@@ -1677,21 +1485,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_int", tb => tb.HasComment("Int Properties of Weenies"));
+            entity.ToTable("weenie_properties_int");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_int_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyInt.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
-                .HasComment("Value of this Property")
                 .HasColumnName("value");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesInt)
@@ -1703,21 +1507,17 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_int64", tb => tb.HasComment("Int64 Properties of Weenies"));
+            entity.ToTable("weenie_properties_int64");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_int64_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyInt64.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
-                .HasComment("Value of this Property")
                 .HasColumnName("value");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesInt64)
@@ -1729,16 +1529,14 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_palette", tb => tb.HasComment("Palette Changes (from PCAPs) of Weenies"));
+            entity.ToTable("weenie_properties_palette");
 
             entity.HasIndex(e => new { e.ObjectId, e.SubPaletteId, e.Offset, e.Length }, "object_Id_subPaletteId_offset_length_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.Length).HasColumnName("length");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Offset).HasColumnName("offset");
             entity.Property(e => e.SubPaletteId).HasColumnName("sub_Palette_Id");
@@ -1752,12 +1550,11 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_position", tb => tb.HasComment("Position Properties of Weenies"));
+            entity.ToTable("weenie_properties_position");
 
             entity.HasIndex(e => new { e.ObjectId, e.PositionType }, "wcid_position_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Position")
                 .HasColumnName("id");
             entity.Property(e => e.AnglesW).HasColumnName("angles_W");
             entity.Property(e => e.AnglesX).HasColumnName("angles_X");
@@ -1765,13 +1562,11 @@ public partial class WorldDbContext : DbContext
             entity.Property(e => e.AnglesZ).HasColumnName("angles_Z");
             entity.Property(e => e.ObjCellId).HasColumnName("obj_Cell_Id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.OriginX).HasColumnName("origin_X");
             entity.Property(e => e.OriginY).HasColumnName("origin_Y");
             entity.Property(e => e.OriginZ).HasColumnName("origin_Z");
             entity.Property(e => e.PositionType)
-                .HasComment("Type of Position the value applies to (PositionType.????)")
                 .HasColumnName("position_Type");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesPosition)
@@ -1783,36 +1578,27 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_skill", tb => tb.HasComment("Skill Properties of Weenies"));
+            entity.ToTable("weenie_properties_skill");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_skill_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.InitLevel)
-                .HasComment("starting point for advancement of the skill (eg bonus points)")
                 .HasColumnName("init_Level");
             entity.Property(e => e.LastUsedTime)
-                .HasComment("time skill was last used")
                 .HasColumnName("last_Used_Time");
             entity.Property(e => e.LevelFromPP)
-                .HasComment("points raised")
                 .HasColumnName("level_From_P_P");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.PP)
-                .HasComment("XP spent on this skill")
                 .HasColumnName("p_p");
             entity.Property(e => e.ResistanceAtLastCheck)
-                .HasComment("last use difficulty")
                 .HasColumnName("resistance_At_Last_Check");
             entity.Property(e => e.SAC)
-                .HasComment("skill state")
                 .HasColumnName("s_a_c");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertySkill.????)")
                 .HasColumnName("type");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesSkill)
@@ -1824,22 +1610,18 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_spell_book", tb => tb.HasComment("SpellBook Properties of Weenies"));
+            entity.ToTable("weenie_properties_spell_book");
 
             entity.HasIndex(e => new { e.ObjectId, e.Spell }, "wcid_spellbook_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Probability)
                 .HasDefaultValueSql("'2'")
-                .HasComment("Chance to cast this spell")
                 .HasColumnName("probability");
             entity.Property(e => e.Spell)
-                .HasComment("Id of Spell")
                 .HasColumnName("spell");
 
             entity.HasOne(d => d.Object).WithMany(p => p.WeeniePropertiesSpellBook)
@@ -1851,22 +1633,18 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_string", tb => tb.HasComment("String Properties of Weenies"));
+            entity.ToTable("weenie_properties_string");
 
             entity.HasIndex(e => new { e.ObjectId, e.Type }, "wcid_string_type_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.Type)
-                .HasComment("Type of Property the value applies to (PropertyString.????)")
                 .HasColumnName("type");
             entity.Property(e => e.Value)
                 .IsRequired()
-                .HasComment("Value of this Property")
                 .HasColumnType("text")
                 .HasColumnName("value");
 
@@ -1879,17 +1657,15 @@ public partial class WorldDbContext : DbContext
         {
             entity.HasKey(e => e.Id).HasName("PRIMARY");
 
-            entity.ToTable("weenie_properties_texture_map", tb => tb.HasComment("Texture Map Changes (from PCAPs) of Weenies"));
+            entity.ToTable("weenie_properties_texture_map");
 
             entity.HasIndex(e => new { e.ObjectId, e.Index, e.OldId }, "object_Id_index_oldId_uidx").IsUnique();
 
             entity.Property(e => e.Id)
-                .HasComment("Unique Id of this Property")
                 .HasColumnName("id");
             entity.Property(e => e.Index).HasColumnName("index");
             entity.Property(e => e.NewId).HasColumnName("new_Id");
             entity.Property(e => e.ObjectId)
-                .HasComment("Id of the object this property belongs to")
                 .HasColumnName("object_Id");
             entity.Property(e => e.OldId).HasColumnName("old_Id");
 
