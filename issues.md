@@ -92,8 +92,9 @@ green result is not over-read:
 ## 2a. Test helpers hard-code an output-path depth
 
 **Severity:** medium — will bite the next person who changes the build layout
-**Files:** `ACE.Server.Tests/TestEnvironment.cs:56`,
-`ACE.Database.Tests/AccountTests.cs:37`
+**Status:** fixed
+**Files:** `ACE.Server.Tests/TestEnvironment.cs`, `ACE.Server.Tests/StarterGearTests.cs`,
+`ACE.Database.Tests/AccountTests.cs`, `ACE.Database.Tests/WeenieSearchTests.cs`
 
 Both compute the server directory by walking five levels up from
 `AppContext.BaseDirectory`:
@@ -116,6 +117,33 @@ setting `platform: x64` globally; Actions has no equivalent.
 **Fix:** walk up to the nearest ancestor directory containing
 `ACE.Server/ACE.Server.csproj` instead of counting levels. That is correct for
 any layout, any platform, and any future target framework.
+
+**Resolution.** Three of the four sites were converted by the review batch; this
+commit did the fourth, `StarterGearTests`, which still had the raw walk. All four
+now search for `ACE.Server/Config.js.example` rather than counting. That marker
+was chosen over the `.csproj` the fix above names because it is a shipped file
+rather than a build output, so it is present in any checkout and in any layout.
+
+`TestEnvironment.FindServerDirectory` takes the starting directory as a
+parameter, and that parameter is the point. At the depth the test host actually
+uses — `bin/arm64/Release/net10.0`, four levels — counting five parents lands on
+`Source`, which is the *correct* answer, so a test that only ever calls the
+parameterless overload cannot tell counting from searching. The defect this
+replaces is precisely a disagreement at some other depth. Driving the depth from
+the test is what makes it observable.
+
+**Tests:** `StarterGearTests` has three. `TheServerDirectoryIsFoundFromAnyOutputDepth`
+calls the search from a path three levels deeper than the real output directory
+and asserts the answer does not move. Verified by mutation: replacing the search
+with a five-parent count fails it. The other two assert the resolved path and the
+reason it is right, so a regression says so by name rather than as a
+`FileNotFoundException` from a read that happens to fail.
+
+**Residual:** the same helper is duplicated in `AccountTests` and
+`WeenieSearchTests` in the other test project, and those two copies are private
+and unguarded. They are correct, but nothing would catch a regression there.
+Consolidating all four into one shared helper would fix that; it needs a home
+both test projects can see, which is why it was not done here.
 
 ---
 

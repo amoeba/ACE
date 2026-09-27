@@ -65,10 +65,30 @@ namespace ACE.Server.Tests
         /// the file instead of counting directories does not care about platform,
         /// build configuration, or how deep the output path is.
         /// </para>
+        /// <para>
+        /// Internal rather than private because <see cref="StarterGearTests"/> needs the
+        /// same answer and a fourth copy of this loop is worse than sharing one.
+        /// </para>
+        /// <para>
+        /// The starting directory is a parameter so the search can be tested at a depth
+        /// the test chooses. That matters because counting and searching agree at the
+        /// depth the test host happens to use -- <c>bin/arm64/Release/net10.0</c> is four
+        /// levels down, so five parents lands on <c>Source</c>, which is the right
+        /// answer. A test that only ever calls the parameterless overload therefore
+        /// cannot tell the two apart, and the defect this replaces is precisely a
+        /// disagreement at some other depth.
+        /// </para>
         /// </summary>
-        private static string FindServerDirectory()
+        internal static string FindServerDirectory()
+            => FindServerDirectory(AppContext.BaseDirectory);
+
+        /// <summary>
+        /// The nearest ancestor of <paramref name="baseDirectory"/> that contains
+        /// <c>ACE.Server/Config.js.example</c>, or the directory itself.
+        /// </summary>
+        internal static string FindServerDirectory(string baseDirectory)
         {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            var dir = new DirectoryInfo(baseDirectory);
 
             while (dir != null)
             {
