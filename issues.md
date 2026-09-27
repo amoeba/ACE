@@ -59,24 +59,150 @@ than testing it, so the test above is still needed.
 ## 2. No CI job exercises the SQLite path
 
 **Severity:** high, for mergeability
-**File:** `AppVeyor/` — nothing to fix, something to add
+**Status:** addressed by `.github/workflows/sqlite-backend-ci.yml`, with the
+scope limit recorded in questions.md item 6.
 
 `AppVeyor/Config.js` has no `Database.Provider` key, so `DbProvider.Active`
-resolves to MySQL and the entire SQLite backend is dead code in the project's
+resolves to MySQL and the entire SQLite backend was dead code in the project's
 own pipeline.
 
-This is the item that gates confidence in everything else on this list. Every
-fix below is unverified by CI until this job exists, and a reviewer has no
-mechanism for checking that a later change did not break the second backend.
+The workflow adds a two-leg matrix — `sqlite` and `mysql` — on
+`windows-latest`, which also closes the one platform the branch had never been
+exercised on. It is additive; AppVeyor still owns releases and deploys. The
+`mysql` leg ships no `Database` key at all, exactly as AppVeyor does, so it
+validates the unchanged default path.
 
-**Fix:** a CI job that runs `ACE.Database.Tests` and `ACE.Server.Tests` with
-`"Provider": "sqlite"`. Both suites read `Config.js`, so the same assertions
-must pass on both providers — a change that only passes one is not done.
+What it runs: the whole solution builds, `ACE.Database.Tests` executes. Both
+were verified locally before the workflow was written — the `sqlite` leg
+end to end from a fresh directory against the digest-pinned artifact, the
+`mysql` leg against OrbStack MySQL. `ACE.Server.Tests` is built but not run;
+see questions.md item 6 for why and what it costs.
 
-Also worth doing at the same time: a second job, or a matrix, that runs the
-existing suites on MySQL so the baseline stays covered. The current job already
-does that implicitly; making it explicit in a matrix keeps it from being
-accidentally dropped.
+Two things this job deliberately does **not** do, both worth knowing so its
+green result is not over-read:
+
+- It **cannot** catch item 1 below. It writes absolute SQLite paths precisely
+  so that every process shares one database file, and that choice routes around
+  the very bug CI should be reporting.
+- It **cannot** catch item 2b below, because it never runs the suite that
+  crashes.
+
+---
+
+## 2a. Test helpers hard-code an output-path depth
+
+**Severity:** medium — will bite the next person who changes the build layout
+**Files:** `ACE.Server.Tests/TestEnvironment.cs:56`,
+`ACE.Database.Tests/AccountTests.cs:37`
+
+Both compute the server directory by walking five levels up from
+`AppContext.BaseDirectory`:
+
+```csharp
+var serverDir = Path.GetFullPath(Path.Combine(testDir, "..", "..", "..", "..", "..", "ACE.Server"));
+```
+
+That is correct only for `bin/<Platform>/Release/net<TFM>`. With a flat
+`bin/Release/net<TFM>` the same walk overshoots to the repository root and every
+test fails with a confusing `DirectoryNotFoundException` for a path that looks
+almost right.
+
+This is not hypothetical. It is why the workflow must pass
+`-p:Platform=x64` to **both** `dotnet build` and `dotnet test`: the csproj
+declares `<Platforms>x64</Platforms>`, so a bare build emits `bin/x64/Release`
+while a bare `dotnet test` looks in `bin/Release`. AppVeyor hides this by
+setting `platform: x64` globally; Actions has no equivalent.
+
+**Fix:** walk up to the nearest ancestor directory containing
+`ACE.Server/ACE.Server.csproj` instead of counting levels. That is correct for
+any layout, any platform, and any future target framework.
+
+---
+
+## 2b. A background thread kills the test host when `.dat` files are absent
+
+**Severity:** medium — presents as a flake, not a failure
+**Files:** `ACE.Server/Managers/WorldManager.cs:60`,
+`ACE.Server/Managers/LandblockManager.cs:127`,
+`ACE.Server/Entity/Landblock.cs:174`
+
+`WorldManager.Initialize` spawns landblock preloading on a background thread.
+`PreloadConfigLandblocks` is gated on `Server.LandblockPreloading`, which
+`Config.js.example` ships as `true`, and `Landblock..ctor` immediately reads
+`DatManager.CellDat`. With no `client_cell_1.dat` that is a null dereference,
+and because it is on a thread pool thread with no handler it takes the whole
+process down.
+
+The bad part is the timing: the test results are sometimes reported *before*
+the thread dies, so the same configuration passes once and aborts the run the
+next time. Found while writing the CI job — the first simulated run passed, the
+second aborted with the identical config.
+
+**Fix (CI):** set `LandblockPreloading: false` in the generated config. That is
+correct only where the `.dat` files are absent, which is the case on a runner.
+
+**Fix (product):** worth considering separately. A developer who follows
+`SQLITE_SETUP.md`, has not yet pointed `DatFilesDirectory` at a real `.dat`
+set, and starts the server gets an unhandled exception on a background thread
+with no indication that the cause is a missing data file. `DatManager`
+already logs a clear `FileNotFoundException` message for exactly this case and
+then lets startup continue into the dereference. An explicit guard, or failing
+fast with that message, would be kinder.
+
+---
+
+## 2c. Test suites silently re-copy `Config.js`, so edits to the copy are lost
+
+**Severity:** low, but it wasted real time
+**Files:** `ACE.Server.Tests/TestEnvironment.cs:63`,
+`ACE.Database.Tests/AccountTests.cs:43`
+
+Both do an unconditional `File.Copy(configSource, testDir/Config.js, true)`
+before `ConfigManager.Initialize()`.
+
+This is correct — it is what lets a developer edit one config and have both
+suites see it — but it means editing the copy in the test output directory has
+no effect whatsoever. Editing it to point at an empty `.dat` directory to test
+dat-free behaviour appeared to work, and the suites passed, because the copy
+had already been overwritten from the real config. The conclusion drawn from
+that run was wrong.
+
+**No code change needed.** Documented here because the same trap will catch
+anyone else trying to vary the config per suite. Vary
+`Source/ACE.Server/Config.js` instead, and be aware the suites share it.
+
+---
+
+## 2d. `ACE.Database.Tests` only passed against a database something else had provisioned
+
+**Severity:** medium — this is what blocked a clean-checkout test run
+**Status:** fixed alongside the CI workflow
+**File:** `ACE.Database.Tests/AccountTests.cs`
+
+`SqliteBootstrapper.EnsureDatabases()` was reachable only from
+`DatabaseManager.Initialize()` and `Program.cs`. `ACE.Database.Tests` calls
+neither — it does not reference `ACE.Server` at all — so nothing in that suite
+ever created `ace_auth.db`.
+
+Every local run passed anyway, because `ACE.Server.Tests` had already created
+the file earlier in the session and the two suites share a database directory.
+On a clean runner the suite fails 6 / 12 with:
+
+```
+SqliteException: SQLite Error 1: 'no such table: account'
+```
+
+which reads like a provider defect rather than a missing fixture.
+
+**Fix:** `AccountTests.TestSetup` now calls `SqliteBootstrapper.EnsureDatabases()`
+after `ConfigManager.Initialize()`, exactly as `Program.cs` does. No-op on
+MySQL — verified 11 / 11 against the local OrbStack MySQL with the call in
+place, `ace_auth.account` left at 0 rows.
+
+Worth noting what this says about the branch more broadly: the suites passed for
+most of this session partly because the environment was already warm. A green
+run on a developer machine is weaker evidence than it looks when nothing in the
+suite provisions its own fixtures.
 
 ---
 

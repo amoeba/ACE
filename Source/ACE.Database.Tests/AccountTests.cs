@@ -43,6 +43,17 @@ namespace ACE.Database.Tests
             File.Copy(configSource, Path.Combine(testDir, "Config.js"), true);
 
             ConfigManager.Initialize();
+
+            // Create the SQLite files from the EF model if they are not there yet,
+            // the same way Program.cs and DatabaseManager.Initialize do. A no-op
+            // for MySQL, where the schema comes from the SQL setup scripts.
+            //
+            // Without this the suite only passes against a database something
+            // else already provisioned -- on a clean checkout the account tests
+            // fail with "no such table: account", which reads like a provider bug
+            // rather than a missing fixture.
+            SqliteBootstrapper.EnsureDatabases();
+
             authDb = new AuthenticationDatabase();
 
             // These tests share one account and depend on running in order, so a
