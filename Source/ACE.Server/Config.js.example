@@ -200,8 +200,9 @@
   //
   // Those are reasons to use MySQL for anything public, not performance reasons.
   //
-  // Paths are resolved relative to the working directory when not absolute, and
-  // must end in .db.
+  // Relative paths are resolved from the directory holding Config.js and the ACE
+  // executable, not the working directory, so the files do not move when ACE is
+  // launched from somewhere else. They must end in .db.
   //
   // On first run with provider "sqlite", ACE creates all three schemas from its
   // own EF model, then downloads the world database (about 130MB) from

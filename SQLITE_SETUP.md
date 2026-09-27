@@ -167,9 +167,11 @@ cd ACE.Server/bin/arm64/Release/net10.0
   },
 ```
 
-Paths may be relative (resolved against the directory you launch ACE from) or
-absolute. Use absolute paths if you run ACE from somewhere other than its
-output directory.
+Paths may be relative or absolute. A relative path is resolved against the
+directory holding `Config.js` and the ACE executable — not the directory you
+launch from — so the database files stay where the config put them when ACE is
+started from elsewhere (a service manager, a scheduled task, a shell that has
+`cd`'d). Use an absolute path to place them somewhere else deliberately.
 
 Per-database diagnostic flags are available and default to off:
 

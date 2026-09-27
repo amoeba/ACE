@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 
+using log4net;
+
 using Microsoft.EntityFrameworkCore;
 
 using ACE.Common;
@@ -25,6 +27,8 @@ namespace ACE.Database
     /// </summary>
     public static class DbProvider
     {
+        private static readonly ILog log = LogManager.GetLogger(typeof(DbProvider));
+
         /// <summary>
         /// Why <see cref="Active"/> returned the default, when it did.
         /// <para>
@@ -137,10 +141,73 @@ namespace ACE.Database
         }
 
         /// <summary>
-        /// Resolves the SQLite file path for a database, relative to the current
-        /// working directory when the configured value is relative.
+        /// The directory that relative SQLite database paths resolve against.
         /// </summary>
+        /// <remarks>
+        /// Internal and settable only so a test can observe the wiring. Under the test
+        /// host <c>Environment.CurrentDirectory</c> and
+        /// <see cref="AppContext.BaseDirectory"/> are the same path, so a test that
+        /// only calls <see cref="ResolveSqlitePath(DatabaseKind)"/> cannot tell which
+        /// of the two the production path used -- and choosing wrongly is precisely
+        /// the defect this indirection exists to make detectable. Overriding it is
+        /// what lets the regression test fail.
+        /// </remarks>
+        internal static string SqliteBaseDirectory { get; set; } = AppContext.BaseDirectory;
+
+        /// <summary>
+        /// Resolves the SQLite file path for a database. A relative configured value
+        /// resolves against <see cref="SqliteBaseDirectory"/> -- the directory holding
+        /// the executable -- and not against the working directory.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The base is where ACE reads <c>Config.js</c> from: Program.cs builds
+        /// <c>Path.Combine(exeLocation, "Config.js")</c>, so a relative database path
+        /// means what a relative path means everywhere else in that file -- relative
+        /// to the config that names it.
+        /// </para>
+        /// <para>
+        /// This used to be <c>Path.GetFullPath(configured)</c>, which resolves a
+        /// relative path against <c>Environment.CurrentDirectory</c>. The databases
+        /// were therefore created somewhere other than the config that named them
+        /// whenever the two directories differed. The difference is invisible in the
+        /// two common cases, which is why it survived: Docker runs
+        /// <c>dotnet ACE.Server.dll</c> with <c>WORKDIR /ace</c>, and <c>dotnet run</c>
+        /// from the project directory sets the working directory to the output
+        /// directory. It diverges under a service manager, a scheduled task, or a
+        /// shell that has <c>cd</c>'d elsewhere -- and the databases then turn up in
+        /// the current directory with nothing to say why.
+        /// </para>
+        /// <para>
+        /// The project has already paid for this class of bug once, on the MySQL
+        /// update scripts: issue #3886, and
+        /// <c>MySqlDatabaseUpdateProvider.PatchDatabase</c>, which falls back to the
+        /// executing assembly's location for the same reason.
+        /// </para>
+        /// <para>
+        /// A rooted configured value is still returned verbatim, so a deployment that
+        /// deliberately points the databases elsewhere is unaffected.
+        /// </para>
+        /// </remarks>
         public static string ResolveSqlitePath(DatabaseKind kind)
+        {
+            var baseDirectory = SqliteBaseDirectory;
+
+            WarnIfWorkingDirectoryDiffers(baseDirectory);
+
+            return ResolveSqlitePath(ConfiguredSqlitePath(kind), baseDirectory);
+        }
+
+        /// <summary>
+        /// The configured path for a database, with the default applied when the
+        /// configuration does not supply one.
+        /// </summary>
+        /// <remarks>
+        /// Separated from the resolution so the rule below can be exercised without a
+        /// config file, and so a test can supply a known configured value and observe
+        /// what it turns into.
+        /// </remarks>
+        internal static string ConfiguredSqlitePath(DatabaseKind kind)
         {
             var configured = kind switch
             {
@@ -150,12 +217,68 @@ namespace ACE.Database
                 _                          => throw new ArgumentOutOfRangeException(nameof(kind))
             };
 
-            if (string.IsNullOrWhiteSpace(configured))
-                configured = $"db/ace_{kind.ToString().ToLowerInvariant()}.db";
+            return string.IsNullOrWhiteSpace(configured)
+                ? $"db/ace_{kind.ToString().ToLowerInvariant()}.db"
+                : configured;
+        }
 
-            return Path.IsPathRooted(configured)
+        /// <summary>
+        /// The resolution rule on its own: a rooted path is used exactly as given, a
+        /// relative one is taken relative to <paramref name="baseDirectory"/>.
+        /// </summary>
+        /// <remarks>
+        /// This never consults the working directory. That is the whole point, and it
+        /// is asserted directly in the tests rather than inferred from the public
+        /// overload, which cannot distinguish the two under the test host.
+        /// </remarks>
+        internal static string ResolveSqlitePath(string configured, string baseDirectory)
+            => Path.IsPathRooted(configured)
                 ? configured
-                : Path.GetFullPath(configured);
+                : Path.GetFullPath(configured, baseDirectory);
+
+        /// <summary>
+        /// Names both directories once, when they differ, so an operator whose
+        /// databases used to appear somewhere else can read why from one log line
+        /// instead of inferring it.
+        /// </summary>
+        /// <remarks>
+        /// Nothing depends on the working directory any more, so this is not a
+        /// warning about behaviour -- it is a breadcrumb. Emitted at most once per
+        /// process, because the answer cannot change while the process runs.
+        /// </remarks>
+        private static bool warnedAboutWorkingDirectory;
+
+        private static void WarnIfWorkingDirectoryDiffers(string baseDirectory)
+        {
+            if (warnedAboutWorkingDirectory)
+                return;
+
+            warnedAboutWorkingDirectory = true;
+
+            var workingDirectory = Directory.GetCurrentDirectory();
+
+            if (!SameDirectory(workingDirectory, baseDirectory))
+                log.Warn($"The working directory '{workingDirectory}' is not the directory that relative database " +
+                         $"paths resolve against, '{baseDirectory}'. Relative Sqlite paths are taken from the " +
+                         "directory holding Config.js and the executable; set an absolute path in the Sqlite " +
+                         "configuration to place the database files elsewhere.");
+        }
+
+        /// <summary>
+        /// Compares two directories as paths rather than as strings, so a trailing
+        /// separator or a redundant segment does not read as a difference. Case is
+        /// ignored only where the platform's filesystem ignores it.
+        /// </summary>
+        private static bool SameDirectory(string left, string right)
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            return string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+                comparison);
         }
 
         public static string SqliteConnectionString(DatabaseKind kind)

@@ -128,8 +128,9 @@ jobs:
 #     an explicit config initialisation step, not just a filter.
 #
 #  6. The absolute SQLite paths above route around the ResolveSqlitePath
-#     working-directory bug, so this workflow cannot catch it. See issues.md
-#     item 1.
+#     working-directory bug, so this workflow cannot catch it by running the
+#     server the way a service manager would. SqlitePathResolutionTests does
+#     catch it, and does run here. See issues.md item 1.
 #
 #  7. Fixture mode proves the schema and the query path, not the data. A green
 #     fixture run and a green release run are not the same claim, which is why

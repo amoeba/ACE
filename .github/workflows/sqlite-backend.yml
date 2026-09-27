@@ -97,8 +97,9 @@ jobs:
       # silently hand each assembly a private copy of the world database.
       # Absolute paths route them all at one file.
       #
-      # The flip side is that this workflow therefore CANNOT catch that bug. See
-      # issues.md item 1.
+      # The flip side is that this workflow cannot catch that bug itself, because
+      # absolute paths never reach the resolution logic. It is covered by
+      # SqlitePathResolutionTests, which does run in this job. See issues.md item 1.
       # ---------------------------------------------------------------------
       - name: Generate Config.js
         env:
