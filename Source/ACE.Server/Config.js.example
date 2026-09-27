@@ -203,14 +203,23 @@
   // Paths are resolved relative to the working directory when not absolute, and
   // must end in .db.
   //
-  // On first run with provider "sqlite", ACE creates the auth and shard schemas
-  // from its own EF model and downloads the world database (about 130MB) from
-  // WorldDatabaseUrl. Set the url to "" to supply your own ace_world.db.
+  // On first run with provider "sqlite", ACE creates all three schemas from its
+  // own EF model, then downloads the world database (about 130MB) from
+  // WorldDatabaseUrl and repairs the numeric column types the conversion
+  // declared as TEXT.
   "Database": {
     "Provider": "mysql",
-    // On startup, create the auth and shard schemas and fetch the world database
-    // if the files are missing. Set to false to manage the files yourself.
-    "AutoCreate": true
+    // On startup, create any missing schemas and fetch the world database if the
+    // file is missing. Set to false to manage the files yourself.
+    "AutoCreate": true,
+    // Pre-converted SQLite world database, produced by amoeba/ace-to-sqlite.
+    //
+    // Set to "" to build the world schema from the EF model instead of
+    // downloading anything. That yields a structurally complete but empty
+    // database: correct tables and column types, no weenies, so a server will
+    // boot and then fail every weenie lookup. It is enough to exercise queries
+    // and the test suite, and nothing more.
+    "WorldDatabaseUrl": "https://github.com/amoeba/ace-to-sqlite/releases/download/latest/ace_world_patches.db"
   },
   // Only read when Provider is "sqlite".
   "Sqlite": {
@@ -221,10 +230,7 @@
       "Database": "db/ace_shard.db"
     },
     "World": {
-      "Database": "db/ace_world.db",
-      // Pre-converted SQLite world database, produced by amoeba/ace-to-sqlite.
-      // Set to "" to supply your own ace_world.db instead.
-      "WorldDatabaseUrl": "https://github.com/amoeba/ace-to-sqlite/releases/download/latest/ace_world_patches.db"
+      "Database": "db/ace_world.db"
     }
   },
   // This section can trigger events that may happen before the world starts up, or after it shuts down

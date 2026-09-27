@@ -8,15 +8,29 @@
 # The project builds on AppVeyor, not GitHub Actions. This is additive and does
 # not replace anything: AppVeyor still owns releases, packaging and deploys.
 #
-# SQLite only, and that is a deliberate scope decision rather than a gap:
+# Two modes, because they answer different questions:
 #
-#   * AppVeyor already runs ACE.Database.Tests against MySQL on every build
-#     (AppVeyor.yml `services: - mysql`, then AppVeyorTestScript.bat). Repeating
-#     it here would be a slower, more fragile duplicate -- GitHub's runners
-#     cannot host a container, so there is no MySQL service to start.
-#   * The interesting provider-independent logic is in the code the branch moved
-#     (IDatabaseUpdateProvider and the resolver behind it), and that is exercised
-#     by ACE.Server.Tests rather than by anything provider-specific here.
+#   fixture (default, every push and PR)
+#       EnsureDatabases builds auth, shard and world from the EF model, and the
+#       suite seeds the two rows its weenie lookups need. Nothing is downloaded.
+#       This asks "does the branch work", and it depends on no artifact that
+#       anyone else has to publish -- which is the main reason it could be
+#       merged upstream as it stands.
+#
+#   release (manual, workflow_dispatch)
+#       Downloads the published world database, pinned by tag and digest, and
+#       runs the same suite against it. This asks "is the thing we would actually
+#       hand someone still good", which a self-built fixture cannot answer: the
+#       fixture's column types are correct by construction, so the TEXT-affinity
+#       repair in SqliteBootstrapper.NormalizeWorldDatabaseTypes is a no-op
+#       against it, and a 2-row database says nothing about whether the 43,913
+#       weenies and 6,266 spells survived the MySQL -> SQLite conversion.
+#
+# Neither mode tests MySQL, and that is deliberate rather than a gap. AppVeyor
+# already runs ACE.Database.Tests against MySQL on every build (AppVeyor.yml
+# `services: - mysql`, then AppVeyorTestScript.bat), so repeating it here would
+# be a slower, more fragile duplicate -- GitHub's runners cannot host a service
+# container, so there is no MySQL to start anyway.
 #
 # Not proposed for upstream as-is. See the note at the bottom.
 
@@ -28,6 +42,12 @@ on:
   pull_request:
     # Filtered on the BASE branch, not the head. The PR targets master.
     branches: [master]
+  workflow_dispatch:
+    inputs:
+      fidelity:
+        description: Also validate the published world database (slow, needs network)
+        type: boolean
+        default: true
 
 # A new push supersedes an in-flight run for the same ref.
 concurrency:
@@ -35,9 +55,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Published at amoeba/ace-to-sqlite. Pinned by tag AND digest: the config
-  # default floats on releases/latest, which would let a newly published
-  # artifact silently change what CI validates.
+  # Only the release mode reads these. The default floating value in
+  # SqliteConfiguration points at releases/latest, which would let a newly
+  # published artifact silently change what CI validates, so the mode that
+  # cares about provenance pins by tag AND digest instead.
   #
   # Converted from the same world release AppVeyor uses. AppVeyor/dbversion.txt
   # is 0.9.295 and this tag is v0.9.295; they have to move together or the two
@@ -47,9 +68,21 @@ env:
 
 jobs:
   test:
-    name: ubuntu-latest
+    name: ${{ matrix.world }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        world: [fixture, release]
+
+    # The fixture mode is the gate and always runs. The release mode is opt-in,
+    # because it is slow, needs network, and depends on an artifact published out
+    # of this repository -- none of which should decide whether a push is green.
+    if: >-
+      matrix.world == 'fixture' ||
+      (github.event_name == 'workflow_dispatch' && inputs.fidelity)
 
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +128,12 @@ jobs:
       # with ReadCommentHandling.Skip. Round-tripping through a JSON parser would
       # discard those comments and reformat the file.
       #
+      # WorldDatabaseUrl is set explicitly, and to the empty string in fixture
+      # mode. SqliteConfiguration's default is a non-empty releases/latest URL,
+      # so leaving the key out would make the bootstrapper download 130MB even
+      # when the intent was to self-provision. An empty value is the documented
+      # way to say "build it from the EF model instead".
+      #
       # The SQLite paths are absolute and shared by every process on the runner.
       # That is deliberate, and it is also a caveat:
       # DbProvider.ResolveSqlitePath resolves relative paths against the working
@@ -106,6 +145,8 @@ jobs:
       # issues.md item 1.
       # ---------------------------------------------------------------------
       - name: Generate Config.js
+        env:
+          WORLD_DB_URL: ${{ matrix.world == 'release' && env.SQLITE_WORLD_URL || '' }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -129,7 +170,8 @@ jobs:
           overlay = "\n".join([
               '  "Database": {',
               '    "Provider": "sqlite",',
-              '    "AutoCreate": true',
+              '    "AutoCreate": true,',
+              '    "WorldDatabaseUrl": "%s"' % os.environ["WORLD_DB_URL"],
               '  },',
               '  "Sqlite": {',
               '    "Authentication": { "Database": "%s/ace_auth.db" },' % db_dir,
@@ -151,15 +193,24 @@ jobs:
           PY
 
       # ---------------------------------------------------------------------
-      # Provision the databases.
+      # Provision the world database, in release mode only.
       #
-      # There is nothing to replay here, and that asymmetry with MySQL is the
-      # thing under test rather than an accident. MySQL gets its schema from
-      # Database/Create, Database/Base and Database/Updates/*.sql. SQLite gets
-      # nothing: SqliteBootstrapper builds auth and shard from the EF model, and
-      # the world database is the one artifact that cannot be generated.
+      # In fixture mode this step does not run and the world database is built
+      # from the EF model by SqliteBootstrapper.EnsureWorldSchema, which is what
+      # auth and shard already did. There is nothing to replay either way, and
+      # that asymmetry with MySQL is the thing under test rather than an
+      # accident: MySQL gets its schema from Database/Create, Database/Base and
+      # Database/Updates/*.sql, while SQLite gets auth and shard from the EF
+      # model and the world database from a release asset.
+      #
+      # This artifact is published with 84 numeric columns declared TEXT
+      # (spell.variance tops out at 99 where a healthy database reaches 800).
+      # NormalizeWorldDatabaseTypes rebuilds them on first open and logs which
+      # tables it touched, so an unrepaired artifact shows up in the log rather
+      # than failing quietly.
       # ---------------------------------------------------------------------
-      - name: Fetch the SQLite world database
+      - name: Fetch the published world database
+        if: matrix.world == 'release'
         run: |
           set -euo pipefail
           dest="$GITHUB_WORKSPACE/db/ace_world.db"
@@ -176,12 +227,6 @@ jobs:
           echo "digest ok: $actual"
           mv "$tmp" "$dest"
 
-          # This artifact is published with 84 numeric columns declared TEXT
-          # (spell.variance tops out at 99 where a healthy database reaches
-          # 800). SqliteBootstrapper.NormalizeWorldDatabaseTypes rebuilds them on
-          # first open and logs which tables it touched, so an unrepaired
-          # artifact shows up in the log rather than failing quietly.
-          #
           # Verified locally against this exact digest: fresh directory,
           # unrepaired file, 99 -> 800, 43,913 weenies, 11/11 green.
 
@@ -212,15 +257,16 @@ jobs:
       # sources rather than assumed: the provider switch itself, the
       # cross-provider collation fix (GetWeenie by name is the .ToLower()
       # comparison MySQL's CI collation used to satisfy for free), the pragma
-      # interceptor, and a world-database weenie lookup. That is the part of the
-      # branch that a second backend could plausibly regress.
+      # interceptor, the world-database self-provisioning, and a weenie lookup by
+      # id and by name. That is the part of the branch a second backend could
+      # plausibly regress.
       #
       # Two things it does NOT cover, which earlier drafts of this comment
       # claimed and were wrong about:
       #   * GetSequenceGaps. Nothing in this project references it. The
       #     differential that validated it was a local exercise, not a test.
-      #   * NormalizeWorldDatabaseTypes is reached only because the downloaded
-      #     artifact needs repair. It runs, but nothing asserts on it.
+      #   * NormalizeWorldDatabaseTypes runs in release mode but nothing asserts
+      #     on what it did.
       #
       # -p:Platform=x64 has to match the build. With no flag, dotnet test looks
       # in bin/Release while the build emitted bin/x64/Release, and the test
@@ -252,11 +298,47 @@ jobs:
           print("auth clean (account=%d)" % count)
           PY
 
+      # Proves the fixture mode really did self-provision rather than silently
+      # finding a database left over from a previous step. Cheap, and it turns
+      # "the tests passed" into "the tests passed against a world database this
+      # job built".
+      - name: Assert the world database was provisioned
+        env:
+          WORLD: ${{ matrix.world }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sqlite3
+          db = os.path.join(os.environ["GITHUB_WORKSPACE"], "db", "ace_world.db")
+          c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+          tables = c.execute(
+              "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+              "AND name NOT LIKE 'sqlite_%'").fetchone()[0]
+          weenies = c.execute("SELECT COUNT(*) FROM weenie").fetchone()[0]
+          c.close()
+
+          mode = os.environ["WORLD"]
+          print("%s: %d tables, %d weenies" % (mode, tables, weenies))
+
+          if tables < 54:
+              raise SystemExit("World database has %d tables; the EF model defines 54." % tables)
+
+          if mode == "fixture" and weenies != 1:
+              raise SystemExit(
+                  "Fixture mode should hold exactly the 1 seeded weenie, found %d. "
+                  "Something else wrote to it." % weenies)
+
+          if mode == "release" and weenies < 40000:
+              raise SystemExit(
+                  "Release mode should hold the full world database, found %d weenies. "
+                  "The artifact is truncated or was not the one that was pinned." % weenies)
+          PY
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-${{ matrix.world }}
           path: ${{ runner.temp }}/results
           if-no-files-found: ignore
 
@@ -265,10 +347,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # Keeping the world database means a failed run can be investigated
-          # without a second 130MB download, and whether the bootstrapper
-          # repaired it is visible by diffing the schema against the published
-          # artifact.
-          name: sqlite-databases
+          # without re-fetching it, and in release mode whether the bootstrapper
+          # repaired the types is visible by diffing the schema against the
+          # published artifact.
+          name: sqlite-databases-${{ matrix.world }}
           path: ${{ github.workspace }}/db
           if-no-files-found: ignore
           retention-days: 7
@@ -278,24 +360,26 @@ jobs:
 #
 # If this graduates, three things have to be settled first:
 #
-#  1. The world database comes from amoeba/ace-to-sqlite, a third-party
-#     repository. The project's own releases publish a .sql.zip and nothing
-#     else, so this job depends on an artifact nobody upstream maintains. See
-#     questions.md item 2.
+#  1. Release mode's world database comes from amoeba/ace-to-sqlite, a
+#     third-party repository. The project's own releases publish a .sql.zip and
+#     nothing else, so that job depends on an artifact nobody upstream
+#     maintains. See questions.md item 2.
+#     Fixture mode has no such dependency and is the half that could merge.
 #
-#  2. Pinning by digest means a new world release fails this job until someone
-#     updates SQLITE_WORLD_URL and SQLITE_WORLD_SHA256. That is the right
-#     trade-off for a validation job and the wrong one for a merge gate.
+#  2. Pinning by digest means a new world release fails release mode until
+#     someone updates SQLITE_WORLD_URL and SQLITE_WORLD_SHA256. That is the
+#     right trade-off for a validation job and the wrong one for a merge gate,
+#     which is the other reason it stays opt-in.
 #
-#  3. Coverage is narrower than AppVeyor's on purpose, because the two
-#     providers cannot both be served here: GitHub's runners cannot host a
+#  3. Coverage is narrower than AppVeyor's on purpose, because the two providers
+#     cannot both be served here: GitHub's runners cannot host a service
 #     container, so there is no MySQL to test against. AppVeyor remains the
 #     MySQL gate; this job is the SQLite one.
 #
-# Two further gaps, both deliberate and both invisible to this workflow:
+# Three further gaps, all deliberate and all invisible to this workflow:
 #
-#  4. ACE.Server.Tests runs only 3 of its 5 classes here even under a filter,
-#     and even those run under MySQL rather than SQLite -- DbProvider.Active
+#  4. ACE.Server.Tests runs only 3 of its 5 classes even under a filter, and
+#     even those run under MySQL rather than SQLite -- DbProvider.Active
 #     swallows an uninitialised ConfigManager and falls back to MySQL, and
 #     nothing in a filtered run calls ConfigManager.Initialize. So they are not
 #     evidence that the SQLite provider resolves. Making them meaningful needs
@@ -304,4 +388,8 @@ jobs:
 #  5. The absolute SQLite paths above route around the ResolveSqlitePath
 #     working-directory bug, so this workflow cannot catch it. See issues.md
 #     item 1.
+#
+#  6. Fixture mode proves the schema and the query path, not the data. A green
+#     fixture run and a green release run are not the same claim, which is why
+#     release mode exists rather than the fixture having replaced it.
 # ---------------------------------------------------------------------------

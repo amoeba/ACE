@@ -132,8 +132,7 @@ namespace ACE.Database
 
             if (string.IsNullOrWhiteSpace(url))
             {
-                log.Warn("[SQLITE] No world database present and no WorldDatabaseUrl configured. " +
-                         "ACE will start but cannot load weenies, spells or recipes.");
+                EnsureWorldSchema(path);
                 return;
             }
 
@@ -172,6 +171,41 @@ namespace ACE.Database
             log.Info("[SQLITE] World database ready.");
 
             NormalizeWorldDatabaseTypes(path);
+        }
+
+        /// <summary>
+        /// Creates the world schema from the EF model, for the case where no world
+        /// database is present and no <c>WorldDatabaseUrl</c> is configured.
+        /// <para>
+        /// This is the path auth and shard already had via
+        /// <c>context.Database.EnsureCreated()</c>; world was the odd one out
+        /// because it was conceived as data rather than schema. The result is a
+        /// structurally complete but empty database: correct tables, correct
+        /// column types, no weenies. <see cref="ValidateWorldDatabase"/> reports
+        /// that honestly, since a server genuinely cannot create characters
+        /// without weenies.
+        /// </para>
+        /// <para>
+        /// It is also what lets a test suite exercise the world database without
+        /// a 130MB download. The schema is the only part that has to be real --
+        /// the queries run against the tables, and return nothing when the tables
+        /// are empty.
+        /// </para>
+        /// </summary>
+        private static void EnsureWorldSchema(string path)
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            var created = !File.Exists(path);
+
+            using var context = new ACE.Database.Models.World.WorldDbContext();
+            context.Database.EnsureCreated();
+
+            if (created)
+                log.Info("[SQLITE] Created ace_world schema from the EF model. It contains no weenies, " +
+                         "spells or recipes: set Database.WorldDatabaseUrl to download a populated one.");
         }
 
         /// <summary>
