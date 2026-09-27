@@ -87,5 +87,34 @@ namespace ACE.DatLoader
                 log.Error($"Exception: {ex.Message}");
             }
         }
+
+        /// <summary>
+        /// Initializes the dat databases with synthesized stand-ins instead of reading any .dat
+        /// files. This is the dat-free mode behind <c>Server.StartWithoutDats</c>, intended for
+        /// protocol work and client development.
+        /// <para />
+        /// Enough of the world comes up to log in, list characters, and enter the game world, but
+        /// the world is a featureless flat plane with no scenery and no terrain. Character creation
+        /// is the one feature that still cannot work, because CharGen and the appearance palettes
+        /// only exist in client_portal.dat; seed characters directly into the database instead.
+        /// <para />
+        /// client_highres.dat is already optional everywhere in the server, so it is left null here
+        /// too, which is the same state a real shard is in when it does not ship the file.
+        /// </summary>
+        public static void InitializeSynthesized(bool loadCell = true)
+        {
+            if (loadCell)
+            {
+                CellDat = CellDatDatabase.CreateSynthesized();
+                log.Warn("Dat-free mode: client_cell_1.dat is synthesized. Every landblock is flat, with no scenery or terrain.");
+            }
+
+            PortalDat = PortalDatDatabase.CreateSynthesized();
+            PortalDat.SkillTable.AddRetiredSkills();
+            log.Warn($"Dat-free mode: client_portal.dat is synthesized. Every table is empty, except the XP curves and the region description, which are generated. Reported as iteration {PortalDat.Iteration}.");
+
+            LanguageDat = LanguageDatDatabase.CreateSynthesized();
+            log.Warn($"Dat-free mode: client_local_English.dat is synthesized. Character titles resolve to no title. Reported as iteration {LanguageDat.Iteration}.");
+        }
     }
 }

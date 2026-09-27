@@ -9,6 +9,16 @@ namespace ACE.DatLoader
         {
         }
 
+        /// <summary>
+        /// A cell database with no backing file. Returns a synthesized flat landblock for any
+        /// cell id. See <see cref="DatManager.InitializeSynthesized"/>.
+        /// </summary>
+        public static CellDatDatabase CreateSynthesized() => new SynthesizedCellDatDatabase();
+
+        protected CellDatDatabase(bool _) : base()
+        {
+        }
+
         public void ExtractLandblockContents(string path)
         {
             foreach (KeyValuePair<uint, DatFile> entry in AllFiles)

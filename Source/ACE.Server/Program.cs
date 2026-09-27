@@ -268,12 +268,25 @@ namespace ACE.Server
             ServerManager.Initialize();
 
             log.Info("Initializing DatManager...");
-            DatManager.Initialize(ConfigManager.Config.Server.DatFilesDirectory, true);
+            if (ConfigManager.Config.Server.StartWithoutDats)
+                DatManager.InitializeSynthesized();
+            else
+                DatManager.Initialize(ConfigManager.Config.Server.DatFilesDirectory, true);
 
             if (ConfigManager.Config.DDD.EnableDATPatching)
             {
-                log.Info("Initializing DDDManager...");
-                DDDManager.Initialize();
+                // There is nothing to patch a client with when the server is running on
+                // synthesized databases, and every patch path dereferences a real .dat file.
+                if (ConfigManager.Config.Server.StartWithoutDats)
+                {
+                    ConfigManager.Config.DDD.EnableDATPatching = false;
+                    log.Warn("DAT Patching was enabled in the config, but it cannot work with StartWithoutDats. Disabling it.");
+                }
+                else
+                {
+                    log.Info("Initializing DDDManager...");
+                    DDDManager.Initialize();
+                }
             }
             else
                 log.Info("DAT Patching Disabled...");

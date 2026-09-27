@@ -17,7 +17,7 @@ namespace ACE.DatLoader
 
         public string FilePath { get; }
 
-        public int Iteration { get { return GetTotalIterations(); } }
+        public virtual int Iteration { get { return GetTotalIterations(); } }
 
         private FileStream stream { get; }
 
@@ -30,6 +30,17 @@ namespace ACE.DatLoader
         public Dictionary<uint, DatFile> AllFiles { get; } = new Dictionary<uint, DatFile>();
 
         public ConcurrentDictionary<uint, FileType> FileCache { get; } = new ConcurrentDictionary<uint, FileType>();
+
+        /// <summary>
+        /// Creates a database with no backing file, for synthesized dat-free operation.
+        /// <para />
+        /// Subclasses built on this constructor must override <see cref="ReadFromDat{T}"/>, because
+        /// <c>stream</c>, <c>RootDirectory</c> and <c>AllFiles</c> are all empty and the base
+        /// implementation has nothing to read from.
+        /// <para />
+        /// See <see cref="DatManager.InitializeSynthesized"/>.
+        /// </summary>
+        protected DatDatabase() { }
 
         public DatDatabase(string filePath, bool keepOpen = false)
         {
@@ -61,7 +72,7 @@ namespace ACE.DatLoader
         /// This will try to find the object for the given fileId in local cache. If the object was not found, it will be read from the dat and cached.<para />
         /// This function is thread safe.
         /// </summary>
-        public T ReadFromDat<T>(uint fileId) where T : FileType, new()
+        public virtual T ReadFromDat<T>(uint fileId) where T : FileType, new()
         {
             // Check the FileCache so we don't need to hit the FileSystem repeatedly
             if (FileCache.TryGetValue(fileId, out FileType result))

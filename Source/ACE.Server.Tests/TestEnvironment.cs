@@ -68,7 +68,10 @@ namespace ACE.Server.Tests
             // that code page by default. Program.cs and DatTests.cs both register it.
             System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
 
-            DatManager.Initialize(ConfigManager.Config.Server.DatFilesDirectory, true);
+            if (ConfigManager.Config.Server.StartWithoutDats)
+                DatManager.InitializeSynthesized();
+            else
+                DatManager.Initialize(ConfigManager.Config.Server.DatFilesDirectory, true);
 
             DatabaseManager.Initialize();
 

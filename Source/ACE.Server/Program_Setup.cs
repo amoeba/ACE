@@ -96,22 +96,30 @@ namespace ACE.Server
             Console.WriteLine();
             Console.WriteLine();
 
-            Console.Write($"Enter the directory location for your DAT files (default: \"{config.Server.DatFilesDirectory}\"): ");
-            if (!nonInteractiveSetup)
-                variable = Console.ReadLine();
+            if (config.Server.StartWithoutDats)
+            {
+                // The dat directory is never read in this mode, so don't ask for it.
+                Console.WriteLine("StartWithoutDats is enabled, so the DAT files directory will not be used.");
+            }
             else
             {
-                variable = Environment.GetEnvironmentVariable("ACE_DAT_FILES_DIRECTORY");
-                Console.WriteLine($"{variable}");
-            }
-            if (!string.IsNullOrWhiteSpace(variable))
-            {
-                var path = Path.GetFullPath(variable.Trim());
-                if (!Path.EndsInDirectorySeparator(path))
-                    path += Path.DirectorySeparatorChar;
-                //path = path.Replace($"{Path.DirectorySeparatorChar}", $"{Path.DirectorySeparatorChar}{Path.DirectorySeparatorChar}");
+                Console.Write($"Enter the directory location for your DAT files (default: \"{config.Server.DatFilesDirectory}\"): ");
+                if (!nonInteractiveSetup)
+                    variable = Console.ReadLine();
+                else
+                {
+                    variable = Environment.GetEnvironmentVariable("ACE_DAT_FILES_DIRECTORY");
+                    Console.WriteLine($"{variable}");
+                }
+                if (!string.IsNullOrWhiteSpace(variable))
+                {
+                    var path = Path.GetFullPath(variable.Trim());
+                    if (!Path.EndsInDirectorySeparator(path))
+                        path += Path.DirectorySeparatorChar;
+                    //path = path.Replace($"{Path.DirectorySeparatorChar}", $"{Path.DirectorySeparatorChar}{Path.DirectorySeparatorChar}");
 
-                config.Server.DatFilesDirectory = path;
+                    config.Server.DatFilesDirectory = path;
+                }
             }
             Console.WriteLine();
 

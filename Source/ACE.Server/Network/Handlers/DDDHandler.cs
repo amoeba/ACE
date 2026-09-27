@@ -24,6 +24,19 @@ namespace ACE.Server.Network.Handlers
         [GameMessage(GameMessageOpcode.DDD_InterrogationResponse, SessionState.AuthConnected)]
         public static void DDD_InterrogationResponse(ClientMessage message, Session session)
         {
+            if (ConfigManager.Config.Server.StartWithoutDats)
+            {
+                // The server has no .dat files, so there is nothing to compare the client's
+                // iteration sets against and nothing to patch it with. Reporting "no update
+                // required" is the honest answer, and it is the answer that keeps the client
+                // moving. Everything below this point dereferences a dat database.
+                log.Info($"[DDD] client {session.Account} responded to Interrogation, but the server is running dat-free, so there is nothing to validate or patch");
+
+                session.Network.EnqueueSend(new GameMessageDDDEndDDD());
+
+                return;
+            }
+
             var clientIsMissingIterations = false;
 
             var clientHasExtraIterations = false;
