@@ -208,10 +208,19 @@ jobs:
       # .dat files, so they are runnable under a filter -- but see the caveat in
       # the footer before treating that as coverage of the SQLite path.
       #
-      # What the suite under test does cover: the provider switch itself, the
-      # cross-provider collation fix, the SQLite pragma interceptor,
-      # GetSequenceGaps, and a world-database weenie lookup. That is the part of
-      # the branch that a second backend could plausibly regress.
+      # What the suite under test actually covers, checked against the test
+      # sources rather than assumed: the provider switch itself, the
+      # cross-provider collation fix (GetWeenie by name is the .ToLower()
+      # comparison MySQL's CI collation used to satisfy for free), the pragma
+      # interceptor, and a world-database weenie lookup. That is the part of the
+      # branch that a second backend could plausibly regress.
+      #
+      # Two things it does NOT cover, which earlier drafts of this comment
+      # claimed and were wrong about:
+      #   * GetSequenceGaps. Nothing in this project references it. The
+      #     differential that validated it was a local exercise, not a test.
+      #   * NormalizeWorldDatabaseTypes is reached only because the downloaded
+      #     artifact needs repair. It runs, but nothing asserts on it.
       #
       # -p:Platform=x64 has to match the build. With no flag, dotnet test looks
       # in bin/Release while the build emitted bin/x64/Release, and the test
