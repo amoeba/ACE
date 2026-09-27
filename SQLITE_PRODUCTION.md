@@ -491,7 +491,10 @@ no `ALTER COLUMN`, no `DROP CONSTRAINT`, and `RENAME COLUMN` requires SQLite
 
 This is the concrete shape of the migration gap. Today we dodge it entirely:
 `Offline.AutoUpdateWorldDatabase` and `Offline.AutoApplyDatabaseUpdates` are
-MySQL-only and skipped, and the world database arrives as a finished artifact.
+MySQL-only, and `SqliteDatabaseUpdateProvider` reports them as unsupported
+rather than the call site skipping them, so the reason is logged whenever an
+operator has enabled either flag. The world database arrives as a finished
+artifact.
 That is fine while the artifact is current and becomes a problem the first time
 you need to move a running shard onto a newer world release — at which point
 the only supported operation is a straight file replacement, discarding any
@@ -536,7 +539,7 @@ This is a bug rather than a stylistic disagreement because **the project already
 fixed this exact problem once**, for the MySQL scripts:
 
 ```csharp
-// Program_DbUpdates.cs:241
+// MySqlDatabaseUpdateProvider.PatchDatabase()
 if (!Directory.Exists(updatesPath))
 {
     // File not found in Environment.CurrentDirectory
@@ -552,7 +555,7 @@ the same bug on a second code path.
 
 **Fix.** Resolve relative SQLite paths against the directory containing
 `ACE.Server.dll`, matching `Program.cs:132`, or at minimum try that location as
-a fallback the way `Program_DbUpdates` does.
+a fallback the way `MySqlDatabaseUpdateProvider.PatchDatabase` does.
 
 ---
 
@@ -656,7 +659,7 @@ documented limitation of a development-only backend.
 | 3.5 | `synchronous=NORMAL` | **defect** | make configurable — `FULL` costs +4% |
 | — | `ResolveSqlitePath` resolves against CWD, not `exeLocation` | **defect** | fix before PR — see §3.10 |
 | 3.3 | No replication / PITR | limitation | out of scope; `VACUUM INTO` documented |
-| 3.9 | No patch pipeline; `ALTER TABLE` limits | limitation | out of scope; logged at startup |
+| 3.9 | No patch pipeline; `ALTER TABLE` limits | limitation | out of scope; provider refuses loudly and logs why |
 | 3.4 | EF opens deferred transactions | limitation | latent; low impact at dev concurrency |
 | 3.6 | `user_version=0`; no schema stamp | improvement | nice-to-have |
 | 3.7 | `cache_size` / `mmap_size` / `journal_size_limit` unset | improvement | nice-to-have; measured as noise |
@@ -684,8 +687,11 @@ do not disturb it:
   family mismatches, and a full 2.8 M-row × 508-column cell-for-cell
   differential against MySQL. The data layer is not the risk.
 - **Disabling the MySQL patch pipeline** under SQLite. Correct — that pipeline
-  is MySQL-specific raw SQL, and failing loudly at startup would be worse than
-  skipping it.
+  is MySQL-specific raw SQL. The skip is now a provider answering `IsSupported`
+  rather than a conditional at the call site, and the reason is logged whenever
+  an operator has enabled one of the `Offline` flags. A warning is the right
+  severity; failing startup would be worse than not patching, and returning
+  quietly would be how a world drifts behind with nothing in the log to say so.
 
 ---
 

@@ -103,13 +103,23 @@ rather than by string-matching the provider inline:
 |---|---|---|
 | `ShardDatabase.GetSequenceGaps` | original, session user-variables | `LAG()` window function |
 | `ShardDatabase.GetEstimatedBiotaCount` | InnoDB row estimate | `COUNT(*)` |
-| `Program.Main` world-DB updater | runs | skipped |
-| `Program.Main` `AutoApplyDatabaseUpdates` | runs | skipped |
-| `DatabaseManager` patch pipeline | runs | skipped |
+| world-DB updater | runs | unsupported, see below |
+| `AutoApplyDatabaseUpdates` | runs | unsupported, see below |
+| `DatabaseManager` patch pipeline | runs | unsupported, see below |
 
-`Program.Main` logs `Database provider is SQLite; skipping MySQL
-world/database patch pipeline.` so the omission is visible in the boot log
-rather than silent.
+The three update pipelines are not a config check at the call site. They are
+`IDatabaseUpdateProvider` in `ACE.Server/DatabaseUpdate`, with
+`MySqlDatabaseUpdateProvider` holding the original MySQL implementation
+unchanged and `SqliteDatabaseUpdateProvider` reporting `IsSupported == false`
+and the reason. `Program.Main` asks the resolved provider once and logs the
+reason instead of calling it, so the omission is visible in the boot log
+rather than silent, and only when the operator had actually enabled one of
+the `Offline` flags.
+
+The SQLite implementation's three methods throw rather than returning
+quietly. The caller is expected to check `IsSupported`, so reaching one is a
+wiring bug, and a no-op that reported success is the failure mode the class
+exists to prevent.
 
 ---
 
@@ -310,7 +320,8 @@ build was also verified clean.
 2. **Name comparisons are no longer indexed.** See §2.2.
 
 3. **No world-DB migration path.** `AutoUpdateWorldDatabase` and
-   `AutoApplyDatabaseUpdates` are MySQL-only and skipped under SQLite. Applying
+   `AutoApplyDatabaseUpdates` are MySQL-only, and the SQLite implementation
+   refuses rather than no-op'ing, so a mistake in the dispatch is loud. Applying
    `DatabaseSetupScripts/*.sql` to SQLite would need a translation layer; the
    SQLite path instead takes the world database as a pre-converted artifact, so
    it starts at whatever version that artifact is. Custom

@@ -425,8 +425,9 @@ occasional contention is invisible. If you do see `database is locked`:
 So there are no surprises later:
 
 - **No world database updates.** `Offline.AutoUpdateWorldDatabase` and
-  `Offline.AutoApplyDatabaseUpdates` are MySQL-only and are skipped. To move to
-  a newer world database you replace the file. Custom
+  `Offline.AutoApplyDatabaseUpdates` are MySQL-only. Leave them on and the boot
+  log explains why they did not run; the world database itself is not touched.
+  To move to a newer world database you replace the file. Custom
   `Database/Optional/World/*.sql` scripts do not run under SQLite.
 - **No replication or point-in-time recovery** without an external tool
   (Litestream).

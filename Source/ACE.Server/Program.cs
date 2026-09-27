@@ -14,6 +14,7 @@ using ACE.Common.Extensions;
 using ACE.Database;
 using ACE.DatLoader;
 using ACE.Server.Command;
+using ACE.Server.DatabaseUpdate;
 using ACE.Server.Managers;
 using ACE.Server.Mods;
 using ACE.Server.Network.Managers;
@@ -209,38 +210,45 @@ namespace ACE.Server
             else
                 log.Info($"AutoServerVersionCheck is disabled...");
 
-            // The world-database auto-updater, the world-customization runner and the
-            // migration runner all speak raw MySQL: they download a mysqldump from
-            // ACE-World-16PY-Patches and replay DatabaseSetupScripts/*.sql through
-            // MySqlConnector. None of that applies to the SQLite backend, which instead
-            // materialises its schema from the EF model and takes the world database as
-            // a pre-converted file (see ACE.Database.SqliteBootstrapper).
-            var providerIsSqlite = ACE.Database.DbProvider.IsSqlite;
-
-            if (providerIsSqlite)
+            // Which backend is in use decides both how the databases were provisioned
+            // and whether the update pipelines below can run. See
+            // DatabaseUpdate/IDatabaseUpdateProvider for why SQLite has no
+            // implementation, and SqliteBootstrapper for how it provisions instead.
+            if (DbProvider.IsSqlite)
             {
                 log.Info("Database provider is SQLite. This is intended for local development and");
                 log.Info("private test worlds; MySQL remains the supported target for public shards.");
-                log.Info("The automatic database update and world database update pipelines are MySQL-only");
-                log.Info("and are being skipped, so this world will not receive schema or data patches as");
-                log.Info("ACE is upgraded. There is also no replication or point-in-time recovery.");
-                log.Info("Skipping MySQL world/database patch pipeline.");
             }
 
-            if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase && !providerIsSqlite)
+            var dbUpdates = DatabaseUpdates.Active;
+
+            if (dbUpdates.IsSupported)
             {
-                CheckForWorldDatabaseUpdate();
+                if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase)
+                {
+                    dbUpdates.CheckForWorldDatabaseUpdate();
 
-                if (ConfigManager.Config.Offline.AutoApplyWorldCustomizations)
-                    AutoApplyWorldCustomizations();
+                    if (ConfigManager.Config.Offline.AutoApplyWorldCustomizations)
+                        dbUpdates.AutoApplyWorldCustomizations();
+                }
+                else
+                    log.Info($"AutoUpdateWorldDatabase is disabled...");
+
+                if (ConfigManager.Config.Offline.AutoApplyDatabaseUpdates)
+                    dbUpdates.AutoApplyDatabaseUpdates();
+                else
+                    log.Info($"AutoApplyDatabaseUpdates is disabled...");
             }
-            else
-                log.Info($"AutoUpdateWorldDatabase is disabled...");
-
-            if (ConfigManager.Config.Offline.AutoApplyDatabaseUpdates && !providerIsSqlite)
-                AutoApplyDatabaseUpdates();
-            else
-                log.Info($"AutoApplyDatabaseUpdates is disabled...");
+            else if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase
+                  || ConfigManager.Config.Offline.AutoApplyWorldCustomizations
+                  || ConfigManager.Config.Offline.AutoApplyDatabaseUpdates)
+            {
+                // Only worth saying when the operator actually asked for one of the
+                // pipelines. Reporting it unconditionally would be noise on a server
+                // that had them switched off already.
+                foreach (var line in dbUpdates.UnsupportedReason)
+                    log.Warn(line);
+            }
 
             // This should only be enabled manually. To enable it, simply uncomment this line
             //ACE.Database.OfflineTools.Shard.BiotaGuidConsolidator.ConsolidateBiotaGuids(0xA0000000, true, false, out int numberOfBiotasConsolidated, out int numberOfBiotasSkipped, out int numberOfErrors);

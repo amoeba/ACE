@@ -190,8 +190,9 @@
   // for working on ACE itself, but it is not a supported substitute for MySQL on
   // a shard players care about. Specifically, on SQLite:
   //
-  //   - the automatic database update and world database update pipelines are
-  //     skipped, so a long-running world will drift behind the MySql scripts in
+  //   - the automatic database update and world database update pipelines below
+  //     are MySQL-only. Leave their flags on and the boot log says why they did
+  //     not run, so a long-running world will drift behind the MySql scripts in
   //     Database/Updates as ACE is upgraded;
   //   - there is no replication and no point-in-time recovery;
   //   - the world database is a pre-converted artifact, not one built from the
