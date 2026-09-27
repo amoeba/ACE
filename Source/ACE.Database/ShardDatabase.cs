@@ -94,7 +94,13 @@ namespace ACE.Database
 
                 while (reader.Read())
                 {
-                    var gap_starts_at             = reader.GetFieldValue<long>(0);
+                    var gap_starts_at = reader.GetFieldValue<long>(0);
+
+                    // Read as long on both providers. This used to be
+                    // GetFieldValue<decimal>, which was right for MySQL and wrong for
+                    // SQLite -- the SQLite gap query returns integer expressions, not
+                    // a DECIMAL. MySqlConnector converts, so the MySQL path is
+                    // unaffected; long is the type both providers actually agree on.
                     var gap_ends_at_not_inclusive = reader.GetFieldValue<long>(1);
 
                     gaps.Add(((uint)gap_starts_at, (uint)gap_ends_at_not_inclusive - 1));

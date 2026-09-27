@@ -117,7 +117,7 @@ namespace ACE.Server.DatabaseUpdate
                         Console.Write($"Importing into World database on SQL server at {ConfigManager.Config.MySql.World.Host}:{ConfigManager.Config.MySql.World.Port} .... ");
                         try
                         {
-                            ExecuteScript(script);
+                            Program.ExecuteScript(script);
                             //Console.Write($" {count} database records affected ....");
                             Console.WriteLine(" complete!");
                         }
@@ -226,7 +226,7 @@ namespace ACE.Server.DatabaseUpdate
                 Console.Write($"Importing into {database} database on SQL server at {host}:{port} .... ");
                 try
                 {
-                    ExecuteScript(script);
+                    Program.ExecuteScript(script);
                     //Console.Write($" {count} database records affected ....");
                     Console.WriteLine(" complete!");
                 }
@@ -299,7 +299,7 @@ namespace ACE.Server.DatabaseUpdate
                         var script = new MySqlConnector.MySqlCommand(completeSQLline, sqlConnect);
                         try
                         {
-                            ExecuteScript(script);
+                            Program.ExecuteScript(script);
                         }
                         catch (MySqlConnector.MySqlException)
                         {
@@ -317,16 +317,6 @@ namespace ACE.Server.DatabaseUpdate
             Console.Write($"Deleting {sqlFile} .... ");
             File.Delete(sqlFile);
             Console.WriteLine("Deleted!");
-        }
-
-        private static void ExecuteScript(MySqlConnector.MySqlCommand scriptCommand)
-        {
-            if (scriptCommand.Connection.State != System.Data.ConnectionState.Open)
-            {
-                scriptCommand.Connection.Open();
-            }
-            scriptCommand.ExecuteNonQuery();
-            Console.Write(".");
         }
 
         private static string GetContentFolder()

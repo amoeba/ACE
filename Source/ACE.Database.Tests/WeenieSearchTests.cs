@@ -25,12 +25,37 @@ namespace ACE.Database.Tests
 
         private static WorldDatabase worldDb;
 
+        /// <summary>
+        /// The <c>ACE.Server</c> project directory, found by walking up from the test
+        /// output until a directory contains <c>ACE.Server/Config.js.example</c>. See
+        /// the same method in <see cref="AccountTests"/> for why counting parent
+        /// directories instead was wrong.
+        /// </summary>
+        private static string FindServerDirectory()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+
+            while (dir != null)
+            {
+                var candidate = Path.Combine(dir.FullName, "ACE.Server", "Config.js.example");
+
+                if (File.Exists(candidate))
+                    return Path.GetDirectoryName(candidate)!;
+
+                dir = dir.Parent;
+            }
+
+            throw new DirectoryNotFoundException(
+                $"Could not find ACE.Server/Config.js.example in any directory above {AppContext.BaseDirectory}. " +
+                "The test output directory does not appear to sit inside the source tree.");
+        }
+
         [ClassInitialize]
         public static void TestSetup(TestContext context)
         {
             // copy config.js
             var testDir = AppContext.BaseDirectory;
-            var serverDir = Path.GetFullPath(Path.Combine(testDir, "..", "..", "..", "..", "..", "ACE.Server"));
+            var serverDir = FindServerDirectory();
             var configSource = Path.Combine(serverDir, "Config.js");
 
             if (!File.Exists(configSource))

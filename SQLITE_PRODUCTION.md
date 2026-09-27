@@ -241,17 +241,48 @@ It attaches a log4net `MemoryAppender` to the interceptor's logger, logs a
 sentinel first so that a mis-wired appender fails loudly rather than passing
 vacuously, and asserts the sentinel is the *only* warning captured.
 
-### 3.2 P1 — `Cache=Shared` disables the thing WAL is for
+### 3.2 P1 — `Cache=Shared` disables the thing WAL is for — **RESOLVED**
 
-`Source/ACE.Common/SqliteConfiguration.cs` builds:
+`Source/ACE.Common/SqliteConfiguration.cs` built:
 
 ```csharp
+[JsonIgnore]
 public string ConnectionOptions { get; } = "Cache=Shared;Foreign Keys=True;Default Timeout=30";
 ```
 
-`SqliteConfiguration.cs:89`, the `ConnectionOptions` property:
+`SqliteConfiguration.cs:89`, the `ConnectionOptions` property. Now:
 
-`Cache=Shared` puts every connection to a given file into one shared cache with
+```csharp
+public string ConnectionOptions { get; set; } = "Pooling=True;Foreign Keys=True;Default Timeout=30";
+```
+
+The `[JsonIgnore]` and the get-only accessor are gone too, so the setting is
+overridable from Config.js rather than only by rebuilding. `SqliteConnectionStringTests`
+in `ACE.Database.Tests` pins all of it — the shared-cache check, pooling, the
+timeout agreeing with the interceptor, foreign keys, and the absence of
+`[JsonIgnore]` — so it cannot silently come back. That suite needs no database and
+no `Config.js`, so CI actually runs it.
+
+Measured against Microsoft.Data.Sqlite 9.0.20, `journal_mode=WAL`, one connection
+per simulated context:
+
+| operation | `Cache=Shared` | `Pooling=True` |
+|---|---|---|
+| write on B while A holds an open reader | `SQLITE_LOCKED` "database table is locked" after 30,078 ms | **succeeds in 0 ms** |
+| second writer while the first holds `BEGIN IMMEDIATE` | `SQLITE_LOCKED` after 30,090 ms | `SQLITE_BUSY` "database is locked" after 30,107 ms |
+
+Two corrections to what this section originally claimed:
+
+- The busy timeout **is** consumed before the failure surfaces. `SQLITE_LOCKED` is
+  not *retried* by `busy_timeout`, but the 30 s elapses first, so the cost is a
+  30-second stall per collision rather than an instant error.
+- "One physical connection per file" is wrong. Shared cache gives connections one
+  shared *page cache* with shared table locks; each still gets its own native
+  handle. The consequence is the same but the mechanism is not, and the wrong
+  mechanism led to a wrong comment in `SqliteBootstrapper.RebuildTable` about a
+  single shared connection being poisoned.
+
+`Cache=Shared` put every connection to a given file into one shared cache with
 **one set of table-level locks**. The consequences:
 
 - Readers block writers at *table* granularity, and they block them for the
@@ -259,14 +290,15 @@ public string ConnectionOptions { get; } = "Cache=Shared;Foreign Keys=True;Defau
   replace with snapshot isolation.
 - `SQLITE_LOCKED` in shared-cache mode is *not* retried by `busy_timeout`.
   Retrying it requires `sqlite3_unlock_notify()`, which `Microsoft.Data.Sqlite`
-  does not expose. So this introduces a distinct, unretriable error class.
+  does not expose. So this introduces a distinct, unretriable error class — and,
+  measured, an unretriable one that costs 30 s to reach.
 - SQLite's own documentation discourages shared cache and marks it for removal
   from the codebase.
 
 Meanwhile `busy_timeout=30000` is largely inert: with one physical connection
 per file there is no second connection to time out against.
 
-Why is it there? The honest reason is that ACE constructs a fresh
+Why was it there? The honest reason is that ACE constructs a fresh
 `DbContext` per operation — `new ShardDbContext()` appears all over
 `ACE.Database` — so without sharing, each operation would open its own
 connection and its own page cache. `Cache=Shared` was the cheap way to stop
@@ -655,7 +687,7 @@ documented limitation of a development-only backend.
 | # | Finding | Kind | Action |
 |---|---|---|---|
 | 3.1 | Pragma failures swallowed; `journal_mode` never verified | **defect** | **fixed** — see §3.1 |
-| 3.2 | `Cache=Shared` defeats WAL; `SQLITE_LOCKED` unretriable | **defect** | fix before PR — needs soak test |
+| 3.2 | `Cache=Shared` defeats WAL; `SQLITE_LOCKED` unretriable | **fixed** | `Pooling=True`; pinned by `SqliteConnectionStringTests` |
 | 3.5 | `synchronous=NORMAL` | **defect** | make configurable — `FULL` costs +4% |
 | — | `ResolveSqlitePath` resolves against CWD, not `exeLocation` | **defect** | fix before PR — see §3.10 |
 | 3.3 | No replication / PITR | limitation | out of scope; `VACUUM INTO` documented |
@@ -710,9 +742,10 @@ quietly."
 2. §3.1 ~~Replace the empty `catch` in the pragma interceptor.~~ **Done.** Each
    pragma is applied and read back individually, a `journal_mode` that is not
    `wal` is fatal, warnings are deduplicated, and four tests pin it — see §3.1.
-3. §3.2 `Cache=Shared` → `Pooling=True`. Needed mostly so `busy_timeout` means
-   something; re-run both suites and add a concurrency soak asserting zero
-   `SQLITE_BUSY`/`SQLITE_LOCKED`.
+3. §3.2 `Cache=Shared` → `Pooling=True`. **Done.** Both suites re-run; the
+   default is now pinned by `SqliteConnectionStringTests` in `ACE.Database.Tests`,
+   which needs no database and no `Config.js`. Still worth doing: a concurrency
+   soak asserting zero `SQLITE_BUSY` under ACE's real background-worker load.
 4. §3.5 Make `synchronous` configurable. `FULL` costs +4% and prevents a
    developer's `-wal` from losing their last few writes to a closed laptop lid.
 

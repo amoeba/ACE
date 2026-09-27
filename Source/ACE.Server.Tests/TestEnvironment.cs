@@ -51,10 +51,44 @@ namespace ACE.Server.Tests
             }
         }
 
+        /// <summary>
+        /// The <c>ACE.Server</c> project directory, found by walking up from the test
+        /// output until a directory contains <c>ACE.Server/Config.js.example</c>.
+        /// <para>
+        /// The previous version counted five parent directories, which is only right
+        /// for a <c>bin/x64/Debug/net*</c> output layout. A default <c>dotnet test</c>
+        /// emits <c>bin/Debug/net*</c> -- four levels -- so the walk overshot to the
+        /// repository root and initialization failed on a path ending in
+        /// <c>.../ACE.Server/Config.js.example</c> (note: repo root, not
+        /// <c>Source/ACE.Server</c>). That is why CI had to pass
+        /// <c>-p:Platform=x64</c> just to keep the arithmetic correct. Looking for
+        /// the file instead of counting directories does not care about platform,
+        /// build configuration, or how deep the output path is.
+        /// </para>
+        /// </summary>
+        private static string FindServerDirectory()
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+
+            while (dir != null)
+            {
+                var candidate = Path.Combine(dir.FullName, "ACE.Server", "Config.js.example");
+
+                if (File.Exists(candidate))
+                    return Path.GetDirectoryName(candidate)!;
+
+                dir = dir.Parent;
+            }
+
+            throw new DirectoryNotFoundException(
+                $"Could not find ACE.Server/Config.js.example in any directory above {AppContext.BaseDirectory}. " +
+                "The test output directory does not appear to sit inside the source tree.");
+        }
+
         private static void Initialize()
         {
             var testDir = AppContext.BaseDirectory;
-            var serverDir = Path.GetFullPath(Path.Combine(testDir, "..", "..", "..", "..", "..", "ACE.Server"));
+            var serverDir = FindServerDirectory();
             var configSource = Path.Combine(serverDir, "Config.js");
 
             if (!File.Exists(configSource))

@@ -80,12 +80,28 @@ namespace ACE.Common
         public bool EnableSensitiveDataLogging { get; set; } = false;
 
         /// <summary>
-        /// Microsoft.Data.Sqlite connection-string fragment. <c>Cache=Shared</c> keeps
-        /// ACE's many short-lived contexts on one connection pool, and
-        /// <c>Default Timeout</c> sets the busy timeout (seconds) that
-        /// <see cref="ACE.Database.SqlitePragmaInterceptor"/> also enforces.
+        /// Microsoft.Data.Sqlite connection-string fragment appended to the generated
+        /// connection string. Settable so an operator can override it without a
+        /// rebuild; the default is what the backend is validated against.
+        /// <para>
+        /// <c>Pooling=True</c> is deliberate and load-bearing. An earlier revision
+        /// used <c>Cache=Shared</c>, which shares one page cache between connections
+        /// and therefore imposes table-level locks between them: a write on one
+        /// connection stalls for the whole busy timeout and then fails with
+        /// <c>SQLITE_LOCKED</c> ("database table is locked") whenever any other
+        /// connection holds a read on that table. That is the reader/writer
+        /// concurrency WAL exists to provide, and it is the access pattern ACE
+        /// generates -- a <c>DbContext</c> per operation plus several background
+        /// workers. Private cache with pooling restores it: the same write succeeds
+        /// immediately, and a genuine writer collision surfaces as the retryable
+        /// <c>SQLITE_BUSY</c> instead. See SQLITE_PRODUCTION.md 3.2.
+        /// </para>
+        /// <para>
+        /// <c>Default Timeout</c> is the busy timeout in seconds, matching the
+        /// <c>busy_timeout</c> that <see cref="ACE.Database.SqlitePragmaInterceptor"/>
+        /// also applies and verifies.
+        /// </para>
         /// </summary>
-        [System.Text.Json.Serialization.JsonIgnore]
-        public string ConnectionOptions { get; } = "Cache=Shared;Foreign Keys=True;Default Timeout=30";
+        public string ConnectionOptions { get; set; } = "Pooling=True;Foreign Keys=True;Default Timeout=30";
     }
 }

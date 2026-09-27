@@ -26,6 +26,31 @@ namespace ACE.Database
     public static class DbProvider
     {
         /// <summary>
+        /// Why <see cref="Active"/> returned the default, when it did.
+        /// <para>
+        /// The default is MySQL, which is the right answer when a config file simply
+        /// has no <c>Database.Provider</c> key -- every deployment that predates this
+        /// feature. It is the wrong answer when no config was ever read at all, because
+        /// "the operator asked for MySQL" and "nothing was configured" then look
+        /// identical to every caller. A filtered test run that skips
+        /// <c>ConfigManager.Initialize</c> is exactly that case, and it silently
+        /// exercises the MySQL path while appearing to test whichever provider the
+        /// checkout names. Exposing the distinction is what lets a test assert it.
+        /// </para>
+        /// <para>
+        /// Computed rather than cached. It used to be a settable flag that
+        /// <see cref="Active"/> updated as a side effect, so it was only truthful
+        /// once something had already read <see cref="Active"/> -- and a caller that
+        /// checked it first saw the initial <c>false</c> and concluded a config had
+        /// been loaded when none had. That is precisely the position
+        /// <c>DatabaseUpdateProviderTests.Active_MatchesTheConfiguredProvider</c> is
+        /// in, and it surfaced as a NullReferenceException instead of the
+        /// inconclusive result the test was written to produce.
+        /// </para>
+        /// </summary>
+        public static bool ConfigUnavailable => ConfigManager.Config?.Database == null;
+
+        /// <summary>
         /// The backend selected by Config.js. Defaults to MySQL so that existing
         /// deployments (and any config file predating this feature) are unaffected.
         /// </summary>
@@ -35,6 +60,9 @@ namespace ACE.Database
             {
                 try
                 {
+                    // A missing Database section is the normal case for any config
+                    // predating this feature, and Resolve() defaults it to MySQL, so
+                    // there is nothing to special-case here.
                     return ConfigManager.Config?.Database?.Resolve() ?? DatabaseProvider.MySql;
                 }
                 catch
@@ -82,6 +110,33 @@ namespace ACE.Database
         internal const string CaseInsensitiveComparisonRationale = "see DbProvider";
 
         /// <summary>
+        /// The loaded config, or a message explaining that there isn't one.
+        /// <para>
+        /// <see cref="Active"/> deliberately tolerates an uninitialised
+        /// <see cref="ConfigManager"/>, but the connection-string builders below it
+        /// cannot: they are only reached once a provider has actually been selected,
+        /// so a null config here means the process is misconfigured or is running
+        /// before initialisation. That deserves to say so rather than surfacing as a
+        /// <see cref="NullReferenceException"/> from whichever field happened to be
+        /// dereferenced first.
+        /// </para>
+        /// </summary>
+        private static MasterConfiguration Config
+        {
+            get
+            {
+                var config = ConfigManager.Config;
+
+                if (config == null)
+                    throw new InvalidOperationException(
+                        "ConfigManager has not been initialized, so no database connection string can be built. " +
+                        "Call ConfigManager.Initialize() before touching any DbContext.");
+
+                return config;
+            }
+        }
+
+        /// <summary>
         /// Resolves the SQLite file path for a database, relative to the current
         /// working directory when the configured value is relative.
         /// </summary>
@@ -89,9 +144,9 @@ namespace ACE.Database
         {
             var configured = kind switch
             {
-                DatabaseKind.Authentication => ConfigManager.Config.Sqlite.Authentication.Database,
-                DatabaseKind.Shard         => ConfigManager.Config.Sqlite.Shard.Database,
-                DatabaseKind.World         => ConfigManager.Config.Sqlite.World.Database,
+                DatabaseKind.Authentication => Config.Sqlite.Authentication.Database,
+                DatabaseKind.Shard         => Config.Sqlite.Shard.Database,
+                DatabaseKind.World         => Config.Sqlite.World.Database,
                 _                          => throw new ArgumentOutOfRangeException(nameof(kind))
             };
 
@@ -107,9 +162,9 @@ namespace ACE.Database
         {
             var cfg = kind switch
             {
-                DatabaseKind.Authentication => ConfigManager.Config.Sqlite.Authentication,
-                DatabaseKind.Shard         => ConfigManager.Config.Sqlite.Shard,
-                DatabaseKind.World         => ConfigManager.Config.Sqlite.World,
+                DatabaseKind.Authentication => Config.Sqlite.Authentication,
+                DatabaseKind.Shard         => Config.Sqlite.Shard,
+                DatabaseKind.World         => Config.Sqlite.World,
                 _                          => throw new ArgumentOutOfRangeException(nameof(kind))
             };
 
@@ -120,9 +175,9 @@ namespace ACE.Database
         {
             var cfg = kind switch
             {
-                DatabaseKind.Authentication => ConfigManager.Config.MySql.Authentication,
-                DatabaseKind.Shard         => ConfigManager.Config.MySql.Shard,
-                DatabaseKind.World         => ConfigManager.Config.MySql.World,
+                DatabaseKind.Authentication => Config.MySql.Authentication,
+                DatabaseKind.Shard         => Config.MySql.Shard,
+                DatabaseKind.World         => Config.MySql.World,
                 _                          => throw new ArgumentOutOfRangeException(nameof(kind))
             };
 
@@ -150,9 +205,9 @@ namespace ACE.Database
 
                 var cfg = kind switch
                 {
-                    DatabaseKind.Authentication => ConfigManager.Config.Sqlite.Authentication,
-                    DatabaseKind.Shard         => ConfigManager.Config.Sqlite.Shard,
-                    _                          => ConfigManager.Config.Sqlite.World
+                    DatabaseKind.Authentication => Config.Sqlite.Authentication,
+                    DatabaseKind.Shard         => Config.Sqlite.Shard,
+                    _                          => Config.Sqlite.World
                 };
 
                 if (cfg.EnableDetailedErrors)
@@ -165,9 +220,9 @@ namespace ACE.Database
             {
                 var cfg = kind switch
                 {
-                    DatabaseKind.Authentication => ConfigManager.Config.MySql.Authentication,
-                    DatabaseKind.Shard         => ConfigManager.Config.MySql.Shard,
-                    _                          => ConfigManager.Config.MySql.World
+                    DatabaseKind.Authentication => Config.MySql.Authentication,
+                    DatabaseKind.Shard         => Config.MySql.Shard,
+                    _                          => Config.MySql.World
                 };
 
                 var connectionString = MySqlConnectionString(kind);

@@ -206,27 +206,41 @@ suite provisions its own fixtures.
 
 ---
 
-## 3. §3.2 — `Cache=Shared` defeats WAL; `SQLITE_LOCKED` is unretriable
+## 3. §3.2 — `Cache=Shared` defeats WAL; `SQLITE_LOCKED` is unretriable — **FIXED**
 
-**Severity:** medium
-**File:** `Source/ACE.Common/SqliteConfiguration.cs:89`
+**Severity:** medium (was high in `SQLITE_PRODUCTION.md` §3.2)
+**File:** `Source/ACE.Common/SqliteConfiguration.cs`
 
 ```csharp
+// was:
 ConnectionOptions = "Cache=Shared;Foreign Keys=True;Default Timeout=30"
+
+// now:
+public string ConnectionOptions { get; set; } = "Pooling=True;Foreign Keys=True;Default Timeout=30";
 ```
 
-`Cache=Shared` is a testing and single-process-coordination option. It defeats
-some of the benefit of WAL, and it interacts badly with `busy_timeout` — which is
+`Cache=Shared` is a testing and single-process-coordination option. It defeated
+some of the benefit of WAL, and it interacted badly with `busy_timeout` — which is
 the thing that actually makes concurrent access safe. A `SQLITE_LOCKED` in
 particular is not retriable the way `SQLITE_BUSY` is.
 
-**Fix:** `Cache=Shared` → `Pooling=True`.
+Measured (Microsoft.Data.Sqlite 9.0.20, WAL, two connections): a write on one
+connection while the other merely holds a reader took **30,078 ms and then failed**
+under `Cache=Shared`, and **0 ms** under `Pooling=True`. So it was worse than the
+original note assumed — not an unretriable error, but a 30-second stall per
+collision en route to one.
 
-**Test:** re-run both suites, plus **a new concurrency soak** asserting zero
-`SQLITE_BUSY` / `SQLITE_LOCKED` under contention. Neither existing suite creates
-any contention between connections, which is precisely why this defect has gone
-unnoticed. This is the most substantial new test on the list and it is the one
-that would honestly close the item.
+**Fix:** done. `Cache=Shared` → `Pooling=True`, and the property is settable and no
+longer `[JsonIgnore]`d, so it is overridable from Config.js rather than only by
+rebuilding. Pinned by `Source/ACE.Database.Tests/SqliteConnectionStringTests.cs`
+(verified to fail when the old default is restored).
+
+**Test:** both suites re-run. The concurrency soak below is still outstanding.
+
+**Test still owed:** **a concurrency soak** asserting zero `SQLITE_BUSY` /
+`SQLITE_LOCKED` under contention. Neither existing suite creates any contention
+between connections, which is part of why this defect went unnoticed. That remains
+the honest way to close the item; the connection-string test only pins the setting.
 
 ---
 

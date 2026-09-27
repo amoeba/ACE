@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -35,10 +36,34 @@ namespace ACE.Server.Tests
         [TestMethod]
         public void WorldManager_Initialize()
         {
-            // TestEnvironment has already initialized the world, which preloads the
-            // configured landblocks from the .dat files and resolves their weenies
-            // out of the world database. Both of those are the thing being tested.
+            // TestEnvironment has already initialized the world. Initialize() returns
+            // as soon as it has started the thread, so the thing worth checking is
+            // that the thread got all the way into the update loop -- which means it
+            // survived PreloadConfigLandblocks, the step that dereferences
+            // DatManager.CellDat and takes the test host down when no .dat files were
+            // loaded. WorldActive is set on the first line of UpdateWorld, so waiting
+            // for it with a timeout is a real signal rather than a race.
+            //
+            // The previous version of this test called StopWorld() and asserted
+            // nothing, so it passed whether or not the world ever started.
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+
+            while (!WorldManager.WorldActive && DateTime.UtcNow < deadline)
+                Thread.Sleep(100);
+
+            Assert.IsTrue(WorldManager.WorldActive,
+                "the world manager thread did not reach the update loop within 30s of Initialize");
+
             WorldManager.StopWorld();
+
+            // StopWorld only raises a flag the loop observes, so give it a moment to
+            // actually go down rather than asserting on the flag immediately.
+            deadline = DateTime.UtcNow.AddSeconds(30);
+
+            while (WorldManager.WorldActive && DateTime.UtcNow < deadline)
+                Thread.Sleep(100);
+
+            Assert.IsFalse(WorldManager.WorldActive, "StopWorld left the world running after 30s");
         }
     }
 }

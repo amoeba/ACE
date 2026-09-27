@@ -100,11 +100,36 @@ namespace ACE.Server.Tests
         public void Active_MatchesTheConfiguredProvider()
         {
             // The resolver's one-line remainder, and the thing that actually runs at
-            // startup. Deliberately not asserted for a particular value: which
-            // provider the suite runs under is a property of the checkout.
-            Assert.AreEqual(ACE.Database.DbProvider.Active, DatabaseUpdates.Active is SqliteDatabaseUpdateProvider
-                ? DatabaseProvider.Sqlite
-                : DatabaseProvider.MySql);
+            // startup.
+            //
+            // Asserting that Active agrees with itself proves nothing, because
+            // DatabaseUpdates.Active is defined as For(DbProvider.Active). What can
+            // fail is the case where the two silently agree for the wrong reason:
+            // DbProvider.Active swallows an uninitialised ConfigManager and returns
+            // MySQL, so a run that never loaded a config agrees with a run whose
+            // config says MySQL -- and a filtered run in this project is exactly the
+            // former, because nothing here calls ConfigManager.Initialize.
+            //
+            // So pin the precondition: either a config was actually read, or say so
+            // and skip. A test that cannot distinguish "MySQL because configured" from
+            // "MySQL because unconfigured" is not evidence for the SQLite provider.
+            if (ACE.Database.DbProvider.ConfigUnavailable)
+            {
+                Assert.Inconclusive(
+                    "No Config.js was loaded, so DbProvider.Active is falling back to MySQL. " +
+                    "Initialise ConfigManager against a config with Database.Provider set before " +
+                    "using this test as evidence about provider resolution.");
+                return;
+            }
+
+            var configured = ConfigManager.Config.Database.Resolve();
+
+            Assert.AreEqual(configured, ACE.Database.DbProvider.Active,
+                "DbProvider.Active disagrees with the configured provider.");
+
+            Assert.IsTrue(
+                DatabaseUpdates.Active is SqliteDatabaseUpdateProvider == (configured == DatabaseProvider.Sqlite),
+                $"DatabaseUpdates.Active did not resolve to the implementation for {configured}.");
         }
     }
 }

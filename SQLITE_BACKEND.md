@@ -87,12 +87,17 @@ applies four pragmas to every connection:
 | `synchronous=NORMAL` | WAL companion. Crash-safe; only risks the last few transactions on power loss. Acceptable for a dev database. |
 | `foreign_keys=ON` | SQLite ignores FKs unless asked. Affects auth/shard only — the pre-converted world DB carries no FKs. |
 
-The connection string also sets `Cache=Shared` and `Default Timeout=30`.
+The connection string also sets `Pooling=True` and `Default Timeout=30`. Both are
+overridable per database via `ConnectionOptions` in Config.js.
 
-> `Cache=Shared` means all contexts in a process share **one** physical
-> connection. A failed transaction therefore has to be rolled back explicitly or
-> the connection stays in a failed state for the next user. This caused a real
-> bug during development; see §3.2.
+> `Pooling` reuses connections across ACE's many short-lived contexts, which is
+> what `Cache=Shared` was reaching for. It is deliberately *not* `Cache=Shared`:
+> shared cache gives every connection to a file one page cache, and that implies
+> table-level locking between them, so in WAL a write on one connection blocks
+> on any other connection merely reading the table — for the whole busy timeout,
+> then failing with `SQLITE_LOCKED`, which `busy_timeout` does not retry. That is
+> the reader/writer concurrency WAL exists to provide, and it is the access
+> pattern ACE generates. See `SQLITE_PRODUCTION.md` §3.2.
 
 ### 1.4 Provider-specific SQL
 
@@ -216,8 +221,9 @@ Two implementation traps, both found by running it:
 
 - index DDL emitted by SQLite needs an explicit trailing `;`, otherwise it gets
   glued onto `COMMIT` and the transaction is never committed;
-- with `Cache=Shared` a failed transaction must be rolled back, or the shared
-  connection is left broken for the next caller.
+- a failed transaction must be rolled back before the connection is reused. With
+  pooling the next caller gets that connection back out of the pool, so an
+  abandoned transaction surfaces as `SQLITE_BUSY` on someone else's write.
 
 ---
 

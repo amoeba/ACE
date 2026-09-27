@@ -75,9 +75,14 @@ namespace ACE.Database
             var shardPath = DbProvider.ResolveSqlitePath(DatabaseKind.Shard);
             var worldPath = DbProvider.ResolveSqlitePath(DatabaseKind.World);
 
-            var dir = Path.GetDirectoryName(authPath);
-            if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
+            // One directory per configured path, not just the auth one. The three
+            // default to the same directory, but nothing requires them to share one,
+            // and SQLite will not create a missing parent for a file it is asked to
+            // create -- so a shard path in a directory that does not exist yet fails
+            // inside EnsureCreated() with a bare "unable to open database file".
+            EnsureDirectoryFor(authPath);
+            EnsureDirectoryFor(shardPath);
+            EnsureDirectoryFor(worldPath);
 
             log.Info($"[SQLITE] auth  -> {authPath}");
             log.Info($"[SQLITE] shard -> {shardPath}");
@@ -86,6 +91,14 @@ namespace ACE.Database
             EnsureAuthDatabase(authPath);
             EnsureShardDatabase(shardPath);
             EnsureWorldDatabase(worldPath);
+        }
+
+        private static void EnsureDirectoryFor(string path)
+        {
+            var dir = Path.GetDirectoryName(path);
+
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
         }
 
         private static void EnsureAuthDatabase(string path)
@@ -136,9 +149,7 @@ namespace ACE.Database
                 return;
             }
 
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir))
-                Directory.CreateDirectory(dir);
+            EnsureDirectoryFor(path);
 
             var temp = path + ".download";
 
@@ -147,26 +158,38 @@ namespace ACE.Database
 
             using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
 
-            using (var response = client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+            try
             {
-                if (!response.IsSuccessStatusCode)
+                using (var response = client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
                 {
-                    log.Error($"[SQLITE] World database download failed: {(int)response.StatusCode} {response.ReasonPhrase}");
-                    return;
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        log.Error($"[SQLITE] World database download failed: {(int)response.StatusCode} {response.ReasonPhrase}");
+                        return;
+                    }
+
+                    var total = response.Content.Headers.ContentLength ?? -1L;
+                    using var input = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+                    using (var output = File.Create(temp))
+                        input.CopyTo(output);
+
+                    if (total > 0)
+                        log.Info($"[SQLITE] Downloaded {total / 1048576.0:F1} MB.");
                 }
 
-                var total = response.Content.Headers.ContentLength ?? -1L;
-                using var input = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
-                using var output = File.Create(temp);
-                input.CopyTo(output);
-
-                if (total > 0)
-                    log.Info($"[SQLITE] Downloaded {total / 1048576.0:F1} MB.");
+                // A partially-written SQLite file is worse than none: move it into place
+                // only once the transfer completed.
+                File.Move(temp, path, true);
             }
-
-            // A partially-written SQLite file is worse than none: move it into place
-            // only once the transfer completed.
-            File.Move(temp, path, true);
+            catch
+            {
+                // A half-written temp file is not reusable -- the next attempt
+                // overwrites it -- but leaving it behind costs the operator 130MB of
+                // disk for as long as they leave it there, next to a world database
+                // that does not exist.
+                TryDelete(temp);
+                throw;
+            }
 
             log.Info("[SQLITE] World database ready.");
 
@@ -467,9 +490,10 @@ namespace ACE.Database
             }
             catch
             {
-                // The connection is shared (Cache=Shared), so a transaction left open
-                // here would poison every later caller with
-                // "cannot start a transaction within a transaction". Always unwind.
+                // Always unwind. Connections are pooled, so this one goes back into
+                // the pool for the next caller to pick up, and a transaction left
+                // open on it would fail that caller's first write with
+                // SQLITE_BUSY. The rollback is what makes the connection reusable.
                 TryRollback(connection);
                 TryExecute(connection, "PRAGMA foreign_keys=ON");
                 throw;
@@ -478,6 +502,19 @@ namespace ACE.Database
             log.DebugFormat("[SQLITE] Rebuilt {0} with {1} corrected column type(s).", table, columnTypes.Count);
 
             return columnTypes.Count;
+        }
+
+        private static void TryDelete(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // Best effort. The caller is already unwinding a more interesting failure.
+            }
         }
 
         private static void TryRollback(System.Data.Common.DbConnection connection)

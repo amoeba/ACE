@@ -454,7 +454,8 @@ namespace ACE.Server
 
                 MySqlDatabaseUpdateProvider.PatchDatabase("Shard", config.MySql.Shard.Host, config.MySql.Shard.Port, config.MySql.Shard.Username, config.MySql.Shard.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
 
-                MySqlDatabaseUpdateProvider.PatchDatabase("World", config.MySql.World.Host, config.MySql.World.Port, config.MySql.World.Username, config.MySql.World.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);            }
+                MySqlDatabaseUpdateProvider.PatchDatabase("World", config.MySql.World.Host, config.MySql.World.Port, config.MySql.World.Username, config.MySql.World.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
+            }
 
             Console.WriteLine();
             Console.WriteLine();
@@ -548,9 +549,9 @@ namespace ACE.Server
         }
 
         /// <summary>
-        /// Shared with <see cref="MySqlDatabaseUpdateProvider"/>, which does the same
-        /// thing for the update scripts. Both callers want the dot-per-script
-        /// progress output, which is why this prints rather than logs.
+        /// The single copy of this, shared with <see cref="MySqlDatabaseUpdateProvider"/>,
+        /// which does the same thing for the update scripts. Both callers want the
+        /// dot-per-script progress output, which is why this prints rather than logs.
         /// </summary>
         internal static void ExecuteScript(MySqlConnector.MySqlCommand scriptCommand)
         {
