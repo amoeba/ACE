@@ -45,7 +45,10 @@ jobs:
   test:
     name: ${{ matrix.provider }}
     runs-on: windows-latest
-    timeout-minutes: 60
+    # Generous because of the mysql leg alone: it builds the solution and then
+    # imports a >1GB world dump on a 2-core runner. The sqlite leg finishes in
+    # about two minutes, so this only ever binds when MySQL is the slow part.
+    timeout-minutes: 90
 
     strategy:
       # One leg failing should not hide the other's result. That is the entire
@@ -72,9 +75,20 @@ jobs:
       # ---------------------------------------------------------------------
       # MySQL only.
       #
-      # GitHub Actions `services:` requires a container runtime, which Windows
-      # runners do not have, so the preinstalled MySQL service is started
-      # directly. AppVeyor does the same with `Start-Service MySQL80`.
+      # There is no MySQL service to start, which is the whole reason this step
+      # exists. AppVeyor gets a real server from `services: - mysql` and then
+      # runs `Start-Service MySQL80`; GitHub's windows runners have neither.
+      # The runner image lists MySQL 8.0 under "Database tools" with no
+      # ServiceName -- unlike PostgreSQL and MongoDB, which do get service rows
+      # -- and the only install script in actions/runner-images is
+      # Install-MysqlCli.ps1, which despite its name installs the full
+      # mysql-8.0.x-winx64.msi. So the server binaries are on disk; nothing is
+      # registered, initialised, or running.
+      #
+      # Hence: initialise a throwaway datadir and start mysqld directly. This is
+      # the one step in the job that rests on an inferred fact about the runner
+      # image, so it fails loudly and prints the paths it used rather than
+      # continuing on a guess.
       # ---------------------------------------------------------------------
       - name: Start MySQL (mysql)
         if: matrix.provider == 'mysql'
@@ -82,36 +96,85 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $svc = Get-Service -Name 'MySQL*' -ErrorAction SilentlyContinue |
-                 Where-Object { $_.Status -eq 'Stopped' } |
+          $bin = Get-ChildItem 'C:\Program Files\MySQL' -Directory -ErrorAction SilentlyContinue |
+                 ForEach-Object { Join-Path $_.FullName 'bin' } |
+                 Where-Object { Test-Path (Join-Path $_ 'mysqld.exe') } |
                  Select-Object -First 1
-          if (-not $svc) { throw 'No stopped MySQL service found on the runner.' }
-          Write-Host "Starting service $($svc.Name)"
-          Start-Service -Name $svc.Name
-          $svc.WaitForStatus('Running', [TimeSpan]::FromMinutes(2))
-
-          $mysql = (Get-Command mysql.exe -ErrorAction Stop).Source
-          Write-Host "mysql.exe: $mysql"
-
-          # The runner image ships root with an empty password. Tolerate either
-          # state so this does not become the reason the job fails.
-          $authenticated = $false
-          foreach ($pw in @('', $env:MYSQL_ROOT_PASSWORD)) {
-            $a = @('-u', 'root', '-N', '-e', 'SELECT 1;')
-            if ($pw) { $a = @('-u', 'root', "-p$pw", '-N', '-e', 'SELECT 1;') }
-            & $mysql @a *> $null
-            if ($LASTEXITCODE -eq 0) {
-              $authenticated = $true
-              if (-not $pw) {
-                Write-Host 'root has an empty password; setting it'
-                & $mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$($env:MYSQL_ROOT_PASSWORD)';"
-              }
-              break
-            }
+          if (-not $bin) {
+            throw 'No mysqld.exe found under C:\Program Files\MySQL. The runner image no longer ships the server binaries.'
           }
-          if (-not $authenticated) { throw 'Could not authenticate to MySQL as root.' }
+          $mysqld = Join-Path $bin 'mysqld.exe'
+          $mysql  = Join-Path $bin 'mysql.exe'
+          Write-Host "mysqld: $mysqld"
+          Write-Host "mysql : $mysql"
 
-          & $mysql -u root "-p$($env:MYSQL_ROOT_PASSWORD)" -N -e 'SELECT VERSION();'
+          # A datadir of our own, not C:\ProgramData\MySQL\..., so the server
+          # cannot pick up state left behind by anything else on the image.
+          $root = Join-Path $env:RUNNER_TEMP 'mysql'
+          $data = Join-Path $root 'data'
+          $log  = Join-Path $root 'mysqld.err'
+          New-Item -ItemType Directory -Force -Path $data | Out-Null
+
+          # --initialize-insecure leaves root with an empty password. The step
+          # below promotes that to MYSQL_ROOT_PASSWORD so the schema and import
+          # steps need no changes.
+          #
+          # No 2>&1 here on purpose. --log-error already sends mysqld's
+          # diagnostics to a file, and merging a native command's stderr into the
+          # success stream produces ErrorRecords that $ErrorActionPreference='Stop'
+          # can turn into a terminating error depending on the pwsh version.
+          Write-Host 'initialising datadir (a minute or so)'
+          & $mysqld --initialize-insecure "--datadir=$data" "--log-error=$log"
+          if ($LASTEXITCODE -ne 0) {
+            throw "mysqld --initialize-insecure failed ($LASTEXITCODE)`n$(Get-Content $log -Raw -ErrorAction SilentlyContinue)"
+          }
+          Get-Content $log -Tail 15 -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "  init: $_" }
+
+          $proc = Start-Process -FilePath $mysqld -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $root 'mysqld.out') `
+            -RedirectStandardError (Join-Path $root 'mysqld.err.txt') `
+            -ArgumentList @(
+              "--datadir=$data",
+              "--log-error=$log",
+              '--port=3306',
+              '--bind-address=127.0.0.1',
+              '--mysqlx=0',                     # the X plugin would claim 33060 for nothing
+              '--max-allowed-packet=1G',        # the world dump arrives as very large INSERTs
+              '--skip-log-bin',                 # import speed only; this database is thrown away
+              '--innodb-flush-log-at-trx-commit=2'
+            )
+          Write-Host "started mysqld as pid $($proc.Id)"
+
+          # Poll the port with a raw socket rather than Test-NetConnection, which
+          # is slow enough to dominate the wait.
+          function Test-Port([int]$port) {
+            $c = [System.Net.Sockets.TcpClient]::new()
+            try { $c.Connect('127.0.0.1', $port); return $true }
+            catch { return $false }
+            finally { $c.Dispose() }
+          }
+
+          $deadline = (Get-Date).AddMinutes(3)
+          while (-not (Test-Port 3306)) {
+            if ($proc.HasExited) {
+              throw "mysqld exited with $($proc.ExitCode).`n$(Get-Content $log -Raw -ErrorAction SilentlyContinue)"
+            }
+            if ((Get-Date) -gt $deadline) {
+              throw "MySQL was not accepting connections on 3306 within 3 minutes.`n$(Get-Content $log -Raw -ErrorAction SilentlyContinue)"
+            }
+            Start-Sleep -Seconds 3
+          }
+          Write-Host 'accepting connections on 3306'
+
+          & $mysql -h 127.0.0.1 -u root -N -e 'SELECT 1;'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not authenticate to MySQL as root.' }
+
+          & $mysql -h 127.0.0.1 -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$($env:MYSQL_ROOT_PASSWORD)';"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not set the root password.' }
+
+          & $mysql -h 127.0.0.1 -u root "-p$($env:MYSQL_ROOT_PASSWORD)" -N -e 'SELECT VERSION();'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not authenticate with the new root password.' }
 
       # ---------------------------------------------------------------------
       # Build the whole solution, not just the project under test.
@@ -304,15 +367,28 @@ jobs:
       # Test
       #
       # Only ACE.Database.Tests. ACE.Server.Tests is built but not run, because
-      # CharacterCreationTests needs client_portal.dat: PlayerFactory.Create
-      # reads heritage groups from DatManager.PortalDat unconditionally, so no
-      # code change removes the dependency, and the .dat set is ~1.2GB of
-      # Turbine's to distribute. Everything else in that suite needs it too --
-      # WorldManager.Initialize preloads landblocks on a background thread, and
-      # without the .dat files that thread throws an unhandled
-      # NullReferenceException that kills the test host. Because it is a race,
-      # the run is sometimes reported green before the thread dies, so it
-      # presents as a flake rather than a failure.
+      # it cannot reach its first test without the .dat files -- not because any
+      # one assertion needs them.
+      #
+      # TestEnvironment.Initialize mirrors Program.cs, and the tail of that is
+      # WorldManager.Initialize, which starts the "World Manager" thread. That
+      # thread calls LandblockManager.PreloadConfigLandblocks, whose Landblock
+      # constructor reads DatManager.CellDat -- null when no .dat files were
+      # loaded. The result is an unhandled NullReferenceException on a
+      # background thread that takes the entire test host down:
+      #
+      #   Test host process crashed : Unhandled exception.
+      #   System.NullReferenceException
+      #     at ACE.Server.Entity.Landblock..ctor(LandblockId id)  Landblock.cs:174
+      #     at LandblockManager.PreloadConfigLandblocks()         LandblockManager.cs:127
+      #     at WorldManager.<>c.<Initialize>b__15_0()             WorldManager.cs:60
+      #
+      # Verified on this branch by pointing DatFilesDirectory at a path that does
+      # not exist. The run aborts rather than reporting a failure, so this is not
+      # something a more tolerant assertion could avoid. Because the thread is
+      # asynchronous, a run can also be reported green before it dies, which
+      # presents as a flake. The .dat set is ~1.2GB of Turbine's to distribute,
+      # so closing this is a hosting and licensing decision, not a code change.
       #
       # What the suite under test does cover: the provider switch itself, the
       # cross-provider collation fix, the SQLite pragma interceptor,
@@ -386,4 +462,14 @@ jobs:
 #  3. Running only ACE.Database.Tests is a real reduction in coverage. Full
 #     coverage needs the .dat files, which is a licensing and hosting decision
 #     rather than a technical one. See questions.md item 6.
+#
+#  4. The mysql leg cannot use a service. AppVeyor gets one from
+#     `services: - mysql`; GitHub's windows runners carry the MySQL binaries but
+#     register no service, so this job initialises a datadir and starts mysqld
+#     itself. That leans on an unstated property of the runner image -- that the
+#     server binaries are installed even though the README lists MySQL only
+#     under "Database tools". If a future image drops them the leg fails on a
+#     path that has nothing to do with this branch. The cleaner answer is a
+#     runner that can host a container, which is the one thing windows-latest
+#     cannot do.
 # ---------------------------------------------------------------------------
