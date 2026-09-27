@@ -232,7 +232,21 @@
     },
     "World": {
       "Database": "db/ace_world.db"
-    }
+    },
+    // Connection-level pragmas applied to every connection. All optional; the
+    // defaults are what the backend is validated against.
+    // synchronous: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA. NORMAL is safe against
+    // application crashes and only risks the last few transactions on OS or power
+    // failure. Set to 2 (FULL) if you would rather not lose writes to a closed lid.
+    "Synchronous": 1,
+    // cache_size in KiB when negative. Bounds the read working set.
+    "CacheSize": -2000,
+    // journal_size_limit in bytes. Bounds how far the write-ahead log can grow
+    // before a checkpoint truncates it. -1 for no limit.
+    "JournalSizeLimit": 104857600,
+    // Stamped into each database via PRAGMA user_version on creation and read back
+    // on startup, so a db/ directory records which schema version it is at.
+    "SchemaVersion": 1
   },
   // This section can trigger events that may happen before the world starts up, or after it shuts down
   // The shard should be in a disconnected state from any running ACE world

@@ -14,6 +14,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
+using ACE.Common;
 using ACE.Database;
 
 namespace ACE.Database.Tests
@@ -178,6 +179,61 @@ namespace ACE.Database.Tests
                 Assert.AreEqual("wal", Scalar(connection, "PRAGMA journal_mode;"));
                 Assert.AreEqual(30000L, ToInt64(Scalar(connection, "PRAGMA busy_timeout;")));
             });
+        }
+
+        /// <summary>
+        /// The two pragmas that were unset, at the defaults they now ship with.
+        /// </summary>
+        [TestMethod]
+        public void ConnectionOpened_AppliesTheDefaultCacheAndJournalLimits()
+        {
+            var path = NewPath("cache-journal-defaults");
+
+            OpenWithPragmas(Probe(path), connection =>
+            {
+                Assert.AreEqual(-2000L, ToInt64(Scalar(connection, "PRAGMA cache_size;")),
+                    "cache_size should default to -2000 (2 MiB)");
+                Assert.AreEqual(104857600L, ToInt64(Scalar(connection, "PRAGMA journal_size_limit;")),
+                    "journal_size_limit should default to 100 MiB");
+            });
+        }
+
+        /// <summary>
+        /// The three configurable pragmas follow the configuration rather than being
+        /// fixed. This is the whole point of making them configurable: a value that
+        /// cannot be changed without a rebuild cannot be tuned for the machine it runs
+        /// on, and the defaults are guesses.
+        /// </summary>
+        [TestMethod]
+        public void ConnectionOpened_PragmaValuesFollowTheConfiguration()
+        {
+            var saved = ConfigManager.Config;
+
+            try
+            {
+                var config = new MasterConfiguration();
+                ConfigManager.Initialize(config);
+
+                config.Sqlite.Synchronous = 2;       // FULL
+                config.Sqlite.CacheSize = -8000;     // 8 MiB
+                config.Sqlite.JournalSizeLimit = -1; // no limit
+
+                var path = NewPath("pragma-config");
+
+                OpenWithPragmas(Probe(path), connection =>
+                {
+                    Assert.AreEqual(2L, ToInt64(Scalar(connection, "PRAGMA synchronous;")),
+                        "synchronous should follow the configured value (2 = FULL)");
+                    Assert.AreEqual(-8000L, ToInt64(Scalar(connection, "PRAGMA cache_size;")),
+                        "cache_size should follow the configured value");
+                    Assert.AreEqual(-1L, ToInt64(Scalar(connection, "PRAGMA journal_size_limit;")),
+                        "journal_size_limit should follow the configured value");
+                });
+            }
+            finally
+            {
+                ConfigManager.Initialize(saved);
+            }
         }
 
         /// <summary>

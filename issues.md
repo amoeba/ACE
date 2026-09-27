@@ -296,7 +296,8 @@ busy timeout per iteration.
 ## 4. §3.5 — `synchronous=NORMAL` is hardcoded
 
 **Severity:** medium
-**File:** `Source/ACE.Database/SqlitePragmaInterceptor.cs:20-22`
+**Status:** fixed
+**File:** `Source/ACE.Database/SqlitePragmaInterceptor.cs`, `Source/ACE.Common/SqliteConfiguration.cs`
 
 `SqlitePragmaInterceptor` sets `synchronous=NORMAL` and documents the choice,
 but there is no way to change it without editing code.
@@ -311,12 +312,25 @@ for anyone not asking for it. The interceptor already applies and verifies each
 pragma individually, so the new one needs a test in `SqlitePragmaTests` like the
 others.
 
+**Resolution.** `Sqlite.Synchronous` (int, default 1=NORMAL; 0=OFF, 2=FULL,
+3=EXTRA). The interceptor reads it per connection rather than caching it, so a
+config change takes effect on the next connection and a test that changes it
+between connections sees the new value. When `ConfigManager` has not been
+initialised the interceptor falls back to a default config, which is the previous
+hardcoded value, so behaviour is unchanged there.
+
+**Tests:** `SqlitePragmaTests.ConnectionOpened_PragmaValuesFollowTheConfiguration`
+sets `Synchronous=2`, `CacheSize=-8000` and `JournalSizeLimit=-1`, and asserts the
+interceptor applied all three. Verified by mutation: hardcoding
+`synchronous=NORMAL` in the interceptor fails it.
+
 ---
 
 ## 5. §3.6 — no `user_version` stamp
 
 **Severity:** low
-**File:** `Source/ACE.Database/SqliteBootstrapper.cs`
+**Status:** fixed
+**File:** `Source/ACE.Database/SqliteBootstrapper.cs`, `Source/ACE.Common/SqliteConfiguration.cs`
 
 `user_version` is 0 in all three files, so nothing records which version a given
 `db/` directory is at. The consequence is entirely about supportability: someone
@@ -328,12 +342,25 @@ lines. Worth doing because the SQLite migration story, if the scoping ever
 changes, needs it — a migration would drive `RebuildTable` and stamp
 `user_version` as it goes.
 
+**Resolution.** `Sqlite.SchemaVersion` (int, default 1). `StampUserVersion` runs
+after each `EnsureCreated()` so the schema and the stamp are written together, and
+`LogUserVersions` reads all three back on startup and logs them, warning when a
+database predates the configured version. That warning is the hook a future
+migration would use, and it is the difference between "these files are at version
+1" and "these files are at version 0 and nobody knows why".
+
+**Tests:** `SqliteBootstrapperTests`, two cases. The first stamps a non-default
+version (7) on purpose — stamping a constant would pass even if the configured
+value were ignored — and asserts all three databases carry it. The second asserts
+the default is 1 rather than SQLite's 0.
+
 ---
 
 ## 6. §3.7 — `cache_size` and `journal_size_limit` unset
 
 **Severity:** low
-**File:** `Source/ACE.Database/SqlitePragmaInterceptor.cs`
+**Status:** fixed
+**File:** `Source/ACE.Database/SqlitePragmaInterceptor.cs`, `Source/ACE.Common/SqliteConfiguration.cs`
 
 Both are unset. `journal_size_limit` bounds WAL growth, which matters for a
 long-running process; `cache_size` bounds the read working set.
@@ -342,6 +369,16 @@ Measured as no speedup (§2), so the case is about bounding worst cases rather
 than performance. **Do not expect this one to show a benchmark difference.**
 
 **Fix:** set both, configurable.
+
+**Resolution.** `Sqlite.CacheSize` (default -2000, i.e. 2 MiB, which is SQLite's
+own default) and `Sqlite.JournalSizeLimit` (default 100 MiB; -1 for no limit).
+Both are applied and read back by the interceptor alongside the other pragmas, so
+a failure to apply is reported rather than ignored.
+
+**Tests:** `SqlitePragmaTests.ConnectionOpened_AppliesTheDefaultCacheAndJournalLimits`
+asserts both defaults are in effect, and
+`ConnectionOpened_PragmaValuesFollowTheConfiguration` asserts they follow the
+configuration.
 
 ---
 

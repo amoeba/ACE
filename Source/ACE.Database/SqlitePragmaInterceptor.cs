@@ -8,6 +8,8 @@ using log4net;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
+using ACE.Common;
+
 namespace ACE.Database
 {
     /// <summary>
@@ -35,7 +37,14 @@ namespace ACE.Database
     /// errors under normal concurrent use.</para>
     /// <para><b>synchronous=NORMAL</b> -- the usual WAL companion setting. Safe against
     /// application crashes; only risks the last few transactions on OS/power failure,
-    /// which is an acceptable trade for a local development database.</para>
+    /// which is an acceptable trade for a local development database. Configurable
+    /// via <c>Sqlite.Synchronous</c> (0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA), defaulting
+    /// to NORMAL so behaviour is unchanged for anyone not asking for it.</para>
+    /// <para><b>cache_size</b> and <b>journal_size_limit</b> -- bound the read working
+    /// set and the write-ahead log's growth. Both are configurable via
+    /// <c>Sqlite.CacheSize</c> and <c>Sqlite.JournalSizeLimit</c>. Neither measured as a
+    /// speedup, so these are about bounding worst cases for a long-running process
+    /// rather than performance.</para>
     /// <para><b>foreign_keys=ON</b> -- SQLite ignores FK constraints unless asked. The
     /// world database from ace-to-sqlite carries no FKs at all, so this only affects
     /// the auth/shard schemas that ACE creates itself.</para>
@@ -48,12 +57,6 @@ namespace ACE.Database
 
         /// <summary>SQLite reports busy_timeout in milliseconds.</summary>
         private const int BusyTimeoutMs = 30000;
-
-        /// <summary>
-        /// SQLite's numeric code for <c>synchronous=NORMAL</c>. There are no symbolic
-        /// names for these, so the number is the contract.
-        /// </summary>
-        private const int SynchronousNormal = 1;
 
         /// <summary>SQLite reports foreign_keys as 0 or 1.</summary>
         private const int ForeignKeysOn = 1;
@@ -73,6 +76,14 @@ namespace ACE.Database
                 return;
 
             var path = Describe(sqlite);
+
+            // The pragma settings are read per connection rather than cached, because
+            // they are process-wide and a test that changes them between connections
+            // would otherwise see a stale value. Falling back to a default config when
+            // ConfigManager has not been initialised keeps the interceptor usable from
+            // design-time and tooling, and the defaults are the previous hardcoded
+            // values, so behaviour is unchanged there.
+            var config = ConfigManager.Config?.Sqlite ?? new SqliteConfiguration();
 
             // journal_mode is the one that must not be tolerated. The deployments
             // where it cannot be set -- a read-only mount, a permissions mistake,
@@ -97,7 +108,9 @@ namespace ACE.Database
             // to zero, so losing it turns ordinary writer contention into
             // SQLITE_BUSY errors that surface to players as failed operations.
             Expect(path, "busy_timeout", Apply(sqlite, path, "busy_timeout", "PRAGMA busy_timeout=30000;", "PRAGMA busy_timeout;"), BusyTimeoutMs);
-            Expect(path, "synchronous", Apply(sqlite, path, "synchronous", "PRAGMA synchronous=NORMAL;", "PRAGMA synchronous;"), SynchronousNormal);
+            Expect(path, "synchronous", Apply(sqlite, path, "synchronous", $"PRAGMA synchronous={config.Synchronous};", "PRAGMA synchronous;"), config.Synchronous);
+            Expect(path, "cache_size", Apply(sqlite, path, "cache_size", $"PRAGMA cache_size={config.CacheSize};", "PRAGMA cache_size;"), config.CacheSize);
+            Expect(path, "journal_size_limit", Apply(sqlite, path, "journal_size_limit", $"PRAGMA journal_size_limit={config.JournalSizeLimit};", "PRAGMA journal_size_limit;"), config.JournalSizeLimit);
             Expect(path, "foreign_keys", Apply(sqlite, path, "foreign_keys", "PRAGMA foreign_keys=ON;", "PRAGMA foreign_keys;"), ForeignKeysOn);
         }
 

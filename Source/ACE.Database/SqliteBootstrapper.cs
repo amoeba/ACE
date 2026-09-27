@@ -91,6 +91,49 @@ namespace ACE.Database
             EnsureAuthDatabase(authPath);
             EnsureShardDatabase(shardPath);
             EnsureWorldDatabase(worldPath);
+
+            LogUserVersions();
+        }
+
+        /// <summary>
+        /// Reads back the schema version of each database and logs it, so a boot log
+        /// records which state the <c>db/</c> directory is in.
+        /// </summary>
+        /// <remarks>
+        /// A version that does not match the configured one means the files predate the
+        /// current schema. That is not an error today -- there are no migrations yet --
+        /// but it is the hook a migration would use, and it is the difference between
+        /// "these files are at version 1" and "these files are at version 0 and nobody
+        /// knows why".
+        /// </summary>
+        private static void LogUserVersions()
+        {
+            var expected = ConfigManager.Config?.Sqlite?.SchemaVersion ?? 1;
+
+            LogUserVersion("ace_auth", new AuthDbContext(), expected);
+            LogUserVersion("ace_shard", new ShardDbContext(), expected);
+            LogUserVersion("ace_world", new ACE.Database.Models.World.WorldDbContext(), expected);
+        }
+
+        private static void LogUserVersion(string name, DbContext context, int expected)
+        {
+            try
+            {
+                using (context)
+                {
+                    var actual = ReadUserVersion(context);
+
+                    if (actual != expected)
+                        log.Warn($"[SQLITE] {name} is at schema version {actual}, expected {expected}. " +
+                                 "The database files predate the current schema.");
+                    else
+                        log.Info($"[SQLITE] {name} is at schema version {actual}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                log.Warn($"[SQLITE] Could not read the schema version of {name}: {ex.Message}");
+            }
         }
 
         private static void EnsureDirectoryFor(string path)
@@ -101,12 +144,51 @@ namespace ACE.Database
                 Directory.CreateDirectory(dir);
         }
 
+        /// <summary>
+        /// Records the configured schema version in a database via
+        /// <c>PRAGMA user_version</c>.
+        /// </summary>
+        /// <remarks>
+        /// This is what makes a <c>db/</c> directory self-describing: a reported problem
+        /// can be tied to a version, and a migration has something to read rather than
+        /// guess at. The version is stamped on creation and read back on startup.
+        /// </remarks>
+        private static void StampUserVersion(DbContext context)
+        {
+            var version = ConfigManager.Config?.Sqlite?.SchemaVersion ?? 1;
+
+            using var connection = context.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+                connection.Open();
+
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = $"PRAGMA user_version = {version};";
+                command.ExecuteNonQuery();
+            }
+        }
+
+        /// <summary>
+        /// Reads the schema version a database was stamped with, for the startup log.
+        /// </summary>
+        private static int ReadUserVersion(DbContext context)
+        {
+            using var connection = context.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+                connection.Open();
+
+            using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA user_version;";
+            return Convert.ToInt32(command.ExecuteScalar());
+        }
+
         private static void EnsureAuthDatabase(string path)
         {
             var created = !File.Exists(path);
 
             using var context = new AuthDbContext();
             context.Database.EnsureCreated();
+            StampUserVersion(context);
 
             if (created)
                 log.Info("[SQLITE] Created ace_auth schema from the EF model.");
@@ -127,6 +209,7 @@ namespace ACE.Database
 
             using var context = new ShardDbContext();
             context.Database.EnsureCreated();
+            StampUserVersion(context);
 
             if (created)
                 log.Info("[SQLITE] Created ace_shard schema from the EF model.");
@@ -225,6 +308,7 @@ namespace ACE.Database
 
             using var context = new ACE.Database.Models.World.WorldDbContext();
             context.Database.EnsureCreated();
+            StampUserVersion(context);
 
             if (created)
                 log.Info("[SQLITE] Created ace_world schema from the EF model. It contains no weenies, " +

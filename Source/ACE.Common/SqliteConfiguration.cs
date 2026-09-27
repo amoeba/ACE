@@ -47,7 +47,8 @@ namespace ACE.Common
     }
 
     /// <summary>
-    /// Per-database settings for the SQLite backend. Each entry is a file path.
+    /// Settings for the SQLite backend: the three per-database file paths and the
+    /// connection-level pragmas applied to every connection.
     /// </summary>
     public class SqliteConfiguration
     {
@@ -65,13 +66,60 @@ namespace ACE.Common
         {
             Database = "db/ace_world.db"
         };
+
+        /// <summary>
+        /// <c>PRAGMA synchronous</c> applied to every connection, using SQLite's
+        /// numeric codes: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA.
+        /// <para>
+        /// Defaults to 1 (NORMAL), which is safe against application crashes and only
+        /// risks the last few transactions on OS or power failure -- the right trade
+        /// for a local development database, and unchanged from the previous
+        /// hardcoded behaviour. A developer on a laptop who would rather not lose
+        /// writes to a closed lid can set this to 2 (FULL); it measures at +4%,
+        /// which is not a real cost at development volumes.
+        /// </para>
+        /// </summary>
+        public int Synchronous { get; set; } = 1;
+
+        /// <summary>
+        /// <c>PRAGMA cache_size</c> applied to every connection, in KiB when negative
+        /// (SQLite's convention) and pages when positive.
+        /// <para>
+        /// Defaults to -2000 (2 MiB), which is SQLite's own default. This bounds the
+        /// read working set. It is not a performance knob -- raising it measured no
+        /// speedup -- so the default is about bounding worst cases, not speed.
+        /// </para>
+        /// </summary>
+        public int CacheSize { get; set; } = -2000;
+
+        /// <summary>
+        /// <c>PRAGMA journal_size_limit</c> applied to every connection, in bytes.
+        /// Bounds how far the write-ahead log can grow before a checkpoint truncates
+        /// it, which matters for a long-running process.
+        /// <para>
+        /// Defaults to 100 MiB. Set to -1 for no limit, which is SQLite's default.
+        /// </para>
+        /// </summary>
+        public int JournalSizeLimit { get; set; } = 104857600;
+
+        /// <summary>
+        /// The schema version stamped into each database via <c>PRAGMA user_version</c>
+        /// on creation and verified on startup.
+        /// <para>
+        /// This records which state a given <c>db/</c> directory is in, so a reported
+        /// problem can be tied to a version. A migration would bump this and drive its
+        /// changes, stamping <c>user_version</c> as it goes.
+        /// </para>
+        /// </summary>
+        public int SchemaVersion { get; set; } = 1;
     }
 
     public class SqliteDatabaseConfiguration
     {
         /// <summary>
-        /// Path to the SQLite database file. Relative paths resolve against the
-        /// ACE.Server working directory.
+        /// Path to the SQLite database file. A relative path resolves against the
+        /// directory holding the executable, which is also the directory Config.js is
+        /// read from -- not the working directory. Absolute paths are used as given.
         /// </summary>
         public string Database { get; set; } = "";
 
