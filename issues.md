@@ -459,13 +459,27 @@ the string. Verified by mutation: removing `Mode=ReadOnly` fails it.
 ## 8. `Config.js.docker` has no `Database`/`Sqlite` block
 
 **Severity:** low
-**File:** `Source/ACE.Server/Config.js.docker`
+**Status:** fixed
+**File:** `Source/ACE.Server/Config.js.docker`, `docker-compose.yml`
 
 The Docker config has no SQLite section, so the Docker path cannot select the
 backend. `docker-compose.yml` also has no volume for the `.db` files, which
 means a container restart loses the world database and re-downloads it.
 
 Groups naturally with the Docker work rather than with the code fixes.
+
+**Resolution.** `Config.js.docker` gains a `Database` block (Provider, AutoCreate,
+WorldDatabaseUrl) and a `Sqlite` block with the three per-database paths and the
+four pragma settings, mirroring `Config.js.example`. It ships as `"Provider":
+"mysql"` because the container is wired to the `ace-db` service; the comments say
+how to switch to SQLite. `docker-compose.yml` gains a `./db:/ace/db` volume, so
+the `.db` files survive a restart instead of being written into the container's
+writable layer and lost.
+
+No test, because there is nothing executable to assert: both changes are static
+configuration, and the Docker image is not built as part of this branch. The
+config was validated by parsing it with comments stripped, and the volume is a
+one-line compose change.
 
 ---
 
