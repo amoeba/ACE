@@ -132,8 +132,13 @@ namespace ACE.Server.Command.Handlers
 
             sb.Append(GuidManager.GetDynamicGuidDebugInfo() + '\n');
 
-            sb.Append($"Portal.dat has {DatManager.PortalDat.FileCache.Count:N0} files cached of {DatManager.PortalDat.AllFiles.Count:N0} total{'\n'}");
-            sb.Append($"Cell.dat has {DatManager.CellDat.FileCache.Count:N0} files cached of {DatManager.CellDat.AllFiles.Count:N0} total{'\n'}");
+            if (ConfigManager.Config.Server.StartWithoutDats)
+                sb.Append("DAT files are not loaded (StartWithoutDats), so there is no dat cache to report.\n");
+            else
+            {
+                sb.Append($"Portal.dat has {DatManager.PortalDat.FileCache.Count:N0} files cached of {DatManager.PortalDat.AllFiles.Count:N0} total{'\n'}");
+                sb.Append($"Cell.dat has {DatManager.CellDat.FileCache.Count:N0} files cached of {DatManager.CellDat.AllFiles.Count:N0} total{'\n'}");
+            }
 
             CommandHandlerHelper.WriteOutputInfo(session, $"{sb}");
         }

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
-using Pomelo.EntityFrameworkCore.MySql.Scaffolding.Internal;
 
 namespace ACE.Database.Models.Auth;
 
@@ -24,29 +23,12 @@ public partial class AuthDbContext : DbContext
     {
         if (!optionsBuilder.IsConfigured)
         {
-            var config = Common.ConfigManager.Config.MySql.Authentication;
-
-            var connectionString = $"server={config.Host};port={config.Port};user={config.Username};password={config.Password};database={config.Database};{config.ConnectionOptions}";
-
-            optionsBuilder.UseMySql(connectionString, DatabaseManager.CachedServerVersionAutoDetect(config.Database, connectionString), builder =>
-            {
-                builder.EnableRetryOnFailure(10);
-            });
-
-            if (config.EnableDetailedErrors)
-                optionsBuilder.EnableDetailedErrors();
-
-            if (config.EnableSensitiveDataLogging)
-                optionsBuilder.EnableSensitiveDataLogging();
+            ACE.Database.DbProvider.Configure(optionsBuilder, ACE.Database.DatabaseKind.Authentication);
         }
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder
-            .UseCollation("utf8_general_ci")
-            .HasCharSet("utf8mb3");
-
         modelBuilder.Entity<Accesslevel>(entity =>
         {
             entity.HasKey(e => e.Level).HasName("PRIMARY");
@@ -113,13 +95,11 @@ public partial class AuthDbContext : DbContext
             entity.Property(e => e.PasswordHash)
                 .IsRequired()
                 .HasMaxLength(88)
-                .HasComment("base64 encoded version of the hashed passwords.  88 characters are needed to base64 encode SHA512 output.")
                 .HasColumnName("passwordHash");
             entity.Property(e => e.PasswordSalt)
                 .IsRequired()
                 .HasMaxLength(88)
                 .HasDefaultValueSql("'use bcrypt'")
-                .HasComment("This is no longer used, except to indicate if bcrypt is being employed for migration purposes. Previously: base64 encoded version of the password salt.  512 byte salts (88 characters when base64 encoded) are recommend for SHA512.")
                 .HasColumnName("passwordSalt");
             entity.Property(e => e.TotalTimesLoggedIn).HasColumnName("total_Times_Logged_In");
 

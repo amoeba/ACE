@@ -38,6 +38,18 @@
         // Note that for servers running on Windows, a path like c:\ace\ MUST be entered as c:\\ace\\, replacing the single backslashes (\) with double backslashes (\\)
         "DatFilesDirectory": "c:\\ACE\\Dats\\",
 
+        // StartWithoutDats, default: false
+        // Start the world without reading any client .dat files. DatFilesDirectory is ignored.
+        // The server synthesizes stand-ins instead: a flat landblock for every cell, empty portal
+        // tables, a generated XP curve with the retail caps, and no titles. That is enough to log
+        // in, list characters, and enter the game world, which is the point -- it lets a headless
+        // or non-rendering client drive the network protocol without shipping 1.2 GB of dats.
+        // The world is a featureless flat plane with no scenery, and character creation does not
+        // work (CharGen and the appearance palettes only exist in client_portal.dat), so seed
+        // characters directly into the database instead. DAT patching is force-disabled.
+        // Intended for protocol work and client development. This is not a playable world.
+        "StartWithoutDats": false,
+
         // The folder that contains Harmony mods
         "ModsDirectory": "c:\\ACE\\Mods\\",
 
@@ -178,6 +190,59 @@
       "Password": "",
       "EnableDetailedErrors": false,
       "EnableSensitiveDataLogging": false
+    }
+  },
+  // Which database backend to use.
+  //
+  // "mysql" (the default) is the supported target for public and private shards.
+  // It uses the MySql section above and behaves exactly as it always has.
+  //
+  // "sqlite" is an optional alternative intended for local development and
+  // private test worlds. It needs no database server, which makes it convenient
+  // for working on ACE itself, but it is not a supported substitute for MySQL on
+  // a shard players care about. Specifically, on SQLite:
+  //
+  //   - the automatic database update and world database update pipelines below
+  //     are MySQL-only. Leave their flags on and the boot log says why they did
+  //     not run, so a long-running world will drift behind the MySql scripts in
+  //     Database/Updates as ACE is upgraded;
+  //   - there is no replication and no point-in-time recovery;
+  //   - the world database is a pre-converted artifact, not one built from the
+  //     .dat files, so it can lag the first-party world release.
+  //
+  // Those are reasons to use MySQL for anything public, not performance reasons.
+  //
+  // Paths are resolved relative to the working directory when not absolute, and
+  // must end in .db.
+  //
+  // On first run with provider "sqlite", ACE creates all three schemas from its
+  // own EF model, then downloads the world database (about 130MB) from
+  // WorldDatabaseUrl and repairs the numeric column types the conversion
+  // declared as TEXT.
+  "Database": {
+    "Provider": "mysql",
+    // On startup, create any missing schemas and fetch the world database if the
+    // file is missing. Set to false to manage the files yourself.
+    "AutoCreate": true,
+    // Pre-converted SQLite world database, produced by amoeba/ace-to-sqlite.
+    //
+    // Set to "" to build the world schema from the EF model instead of
+    // downloading anything. That yields a structurally complete but empty
+    // database: correct tables and column types, no weenies, so a server will
+    // boot and then fail every weenie lookup. It is enough to exercise queries
+    // and the test suite, and nothing more.
+    "WorldDatabaseUrl": "https://github.com/amoeba/ace-to-sqlite/releases/download/latest/ace_world_patches.db"
+  },
+  // Only read when Provider is "sqlite".
+  "Sqlite": {
+    "Authentication": {
+      "Database": "db/ace_auth.db"
+    },
+    "Shard": {
+      "Database": "db/ace_shard.db"
+    },
+    "World": {
+      "Database": "db/ace_world.db"
     }
   },
   // This section can trigger events that may happen before the world starts up, or after it shuts down

@@ -12,6 +12,21 @@ namespace ACE.Common
 
         public string DatFilesDirectory { get; set; } = "c:\\ACE\\Dats\\";
 
+        /// <summary>
+        /// Starts the world without reading any client .dat files.
+        /// <para />
+        /// The server synthesizes stand-ins for the four dat databases instead: a flat landblock
+        /// for every cell, an empty-but-well-formed set of portal tables, and a generated XP curve
+        /// with the retail entry counts. Enough to log in, list characters, and enter the world.
+        /// <para />
+        /// Character creation is the one feature that still cannot work, because <c>CharGen</c>
+        /// and the appearance palettes are only available in client_portal.dat. Seed characters
+        /// directly into the database instead.
+        /// <para />
+        /// This is intended for protocol work and client development. It is not a playable world.
+        /// </summary>
+        public bool StartWithoutDats { get; set; } = false;
+
         public string ModsDirectory { get; set; }
 
         /// <summary>

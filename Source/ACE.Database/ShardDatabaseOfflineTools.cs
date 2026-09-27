@@ -990,8 +990,18 @@ namespace ACE.Database
                 {
                     var result = context.BiotaPropertiesPalette.FirstOrDefault();
                 }
-                catch (MySqlConnector.MySqlException)
+                catch (Exception ex)
                 {
+                    // On a fresh SQLite shard the schema is generated from the EF model,
+                    // which already declares `order`, so this path is only expected to
+                    // trigger for MySQL databases created before the column existed.
+                    if (DbProvider.IsSqlite)
+                    {
+                        log.FatalFormat("SQLite shard database is missing the order column in biota_properties_palette: {0}", ex.GetFullMessage());
+                        Environment.Exit(1);
+                        return;
+                    }
+
                     log.Warn("order column in biota_properties_palette table in shard database is missing! Attempting to fix...");
                     try
                     {
@@ -999,9 +1009,9 @@ namespace ACE.Database
 
                         var result = context.BiotaPropertiesPalette.FirstOrDefault();
                     }
-                    catch (Exception ex)
+                    catch (Exception ex2)
                     {
-                        log.FatalFormat("Unable to restore order column in biota_properties_palette table in shard database due to following error: {0}", ex.GetFullMessage());
+                        log.FatalFormat("Unable to restore order column in biota_properties_palette table in shard database due to following error: {0}", ex2.GetFullMessage());
                         Environment.Exit(1);
                         return;
                     }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 
+using ACE.Common;
 using ACE.DatLoader;
 using ACE.DatLoader.FileTypes;
 using ACE.Entity.Enum;
@@ -10,6 +11,19 @@ namespace ACE.Server.Command.Handlers
 {
     public static class ConsoleCommands
     {
+        /// <summary>
+        /// Guards the *-export commands, which walk a dat database's file table. With synthesized
+        /// databases the table is empty, so they would silently export nothing.
+        /// </summary>
+        private static bool RejectWhenDatFree(string datFileName)
+        {
+            if (!ConfigManager.Config.Server.StartWithoutDats)
+                return false;
+
+            Console.WriteLine($"{datFileName} was not loaded, because the server is running with StartWithoutDats.");
+            return true;
+        }
+
         [CommandHandler("version", AccessLevel.Admin, CommandHandlerFlag.ConsoleInvoke, 0, "Show server version information.", "")]
         public static void ShowVersion(Session session, params string[] parameters)
         {
@@ -26,6 +40,9 @@ namespace ACE.Server.Command.Handlers
         [CommandHandler("cell-export", AccessLevel.Admin, CommandHandlerFlag.ConsoleInvoke, 1, "Export contents of CELL DAT file.", "<export-directory-without-spaces>")]
         public static void ExportCellDatContents(Session session, params string[] parameters)
         {
+            if (RejectWhenDatFree("client_cell_1.dat"))
+                return;
+
             if (parameters?.Length != 1)
                 Console.WriteLine("cell-export <export-directory-without-spaces>");
 
@@ -39,6 +56,9 @@ namespace ACE.Server.Command.Handlers
         [CommandHandler("portal-export", AccessLevel.Admin, CommandHandlerFlag.ConsoleInvoke, 1, "Export contents of PORTAL DAT file.", "<export-directory-without-spaces>")]
         public static void ExportPortalDatContents(Session session, params string[] parameters)
         {
+            if (RejectWhenDatFree("client_portal.dat"))
+                return;
+
             if (parameters?.Length != 1)
                 Console.WriteLine("portal-export <export-directory-without-spaces>");
 
@@ -52,6 +72,9 @@ namespace ACE.Server.Command.Handlers
         [CommandHandler("highres-export", AccessLevel.Admin, CommandHandlerFlag.ConsoleInvoke, 1, "Export contents of client_highres.dat file.", "<export-directory-without-spaces>")]
         public static void ExportHighresDatContents(Session session, params string[] parameters)
         {
+            if (RejectWhenDatFree("client_highres.dat"))
+                return;
+
             if (DatManager.HighResDat == null)
             {
                 Console.WriteLine("client_highres.dat file was not loaded.");
@@ -70,6 +93,9 @@ namespace ACE.Server.Command.Handlers
         [CommandHandler("language-export", AccessLevel.Admin, CommandHandlerFlag.ConsoleInvoke, 1, "Export contents of client_local_English.dat file.", "<export-directory-without-spaces>")]
         public static void ExportLanguageDatContents(Session session, params string[] parameters)
         {
+            if (RejectWhenDatFree("client_local_English.dat"))
+                return;
+
             if (DatManager.LanguageDat == null)
             {
                 Console.WriteLine("client_highres.dat file was not loaded.");

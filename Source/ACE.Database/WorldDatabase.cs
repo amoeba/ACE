@@ -22,7 +22,7 @@ namespace ACE.Database
 
         public bool Exists(bool retryUntilFound)
         {
-            var config = Common.ConfigManager.Config.MySql.World;
+            var target = DatabaseManager.DescribeTarget(DatabaseKind.World);
 
             for (; ; )
             {
@@ -30,12 +30,12 @@ namespace ACE.Database
                 {
                     if (((RelationalDatabaseCreator)context.Database.GetService<IDatabaseCreator>()).Exists())
                     {
-                        log.InfoFormat("[DATABASE] Successfully connected to {0} database on {1}:{2}.", config.Database, config.Host, config.Port);
+                        log.InfoFormat("[DATABASE] Successfully connected to {0}.", target);
                         return true;
                     }
                 }
 
-                log.Error($"[DATABASE] Attempting to reconnect to {config.Database} database on {config.Host}:{config.Port} in 5 seconds...");
+                log.Error($"[DATABASE] Attempting to reconnect to {target} in 5 seconds...");
 
                 if (retryUntilFound)
                     Thread.Sleep(5000);
@@ -189,7 +189,8 @@ namespace ACE.Database
         public Weenie GetWeenie(WorldDbContext context, string weenieClassName)
         {
             var result = context.Weenie
-                .FirstOrDefault(r => r.ClassName == weenieClassName);
+                // case-insensitive on purpose: MySQL collations are CI, SQLite's = is not
+                .FirstOrDefault(r => r.ClassName.ToLower() == weenieClassName.ToLower());
 
             if (result != null)
                 return GetWeenie(context, result.ClassId);
