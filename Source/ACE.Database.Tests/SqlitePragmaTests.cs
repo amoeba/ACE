@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.Common;
 using System.IO;
 using System.Linq;
+using System.Threading;
 
 using log4net;
 using log4net.Appender;
@@ -41,11 +42,32 @@ namespace ACE.Database.Tests
             Directory.CreateDirectory(tempDir);
         }
 
+        /// <summary>
+        /// Removes the temp directory. Every connection this class opens is
+        /// non-pooled, so the file handles are released by Dispose and nothing is
+        /// still holding the files open. The delete is retried regardless, because
+        /// Windows can report a handle as busy for a short while after the owning
+        /// process closes it, and a throw here is reported as a failed test even
+        /// when every assertion in the class passed.
+        /// </summary>
         [ClassCleanup]
         public static void TestCleanup()
         {
-            if (tempDir != null && Directory.Exists(tempDir))
-                Directory.Delete(tempDir, true);
+            if (tempDir == null || !Directory.Exists(tempDir))
+                return;
+
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(tempDir, true);
+                    return;
+                }
+                catch (Exception e) when (attempt < 9 && (e is IOException || e is UnauthorizedAccessException))
+                {
+                    Thread.Sleep(100);
+                }
+            }
         }
 
         [TestMethod]
@@ -53,7 +75,7 @@ namespace ACE.Database.Tests
         {
             var path = NewPath("applied");
 
-            OpenWithPragmas($"Data Source={path}", connection =>
+            OpenWithPragmas(Probe(path), connection =>
             {
                 Assert.AreEqual("wal", Scalar(connection, "PRAGMA journal_mode;"), "journal_mode should be WAL");
                 Assert.AreEqual(30000L, ToInt64(Scalar(connection, "PRAGMA busy_timeout;")), "busy_timeout should be 30s rather than the default of 0");
@@ -98,7 +120,7 @@ namespace ACE.Database.Tests
                 // never wired up fails loudly instead of passing vacuously.
                 logger.Log(typeof(SqlitePragmaInterceptor), Level.Warn, "sentinel", null);
 
-                OpenWithPragmas($"Data Source={path}");
+                OpenWithPragmas(Probe(path));
             }
             finally
             {
@@ -127,7 +149,7 @@ namespace ACE.Database.Tests
             var path = NewPath("readonly-connection");
             CreateRollbackJournalledDatabase(path);
 
-            var ex = Assert.Throws<InvalidOperationException>(() => OpenWithPragmas($"Data Source={path};Mode=ReadOnly"));
+            var ex = Assert.Throws<InvalidOperationException>(() => OpenWithPragmas(Probe(path, "Mode=ReadOnly")));
 
             // The message is the only thing a developer sees before the server gives
             // up, so it has to name both the pragma that failed and the file.
@@ -147,15 +169,35 @@ namespace ACE.Database.Tests
         {
             var path = NewPath("already-wal");
 
-            OpenWithPragmas($"Data Source={path}");
+            OpenWithPragmas(Probe(path));
             Assert.AreEqual("wal", CurrentJournalMode(path));
 
             // No exception is the assertion.
-            OpenWithPragmas($"Data Source={path};Mode=ReadOnly", connection =>
+            OpenWithPragmas(Probe(path, "Mode=ReadOnly"), connection =>
             {
                 Assert.AreEqual("wal", Scalar(connection, "PRAGMA journal_mode;"));
                 Assert.AreEqual(30000L, ToInt64(Scalar(connection, "PRAGMA busy_timeout;")));
             });
+        }
+
+        /// <summary>
+        /// Builds a connection string for one of the probe databases.
+        /// </summary>
+        /// <remarks>
+        /// Pooling is off deliberately. Microsoft.Data.Sqlite pools by default, and a
+        /// pooled connection keeps its file handles open after Dispose, so the
+        /// database and its -wal stay locked once the last test in the class has
+        /// finished. Deleting the temp directory then fails on Windows, and because
+        /// the failure surfaces in ClassCleanup it is reported as a failed test
+        /// even though every assertion passed -- which is how the first CI run
+        /// failed. These tests open a handful of connections against throwaway
+        /// files, so a pool has nothing to offer.
+        /// </remarks>
+        private static string Probe(string path, string mode = null)
+        {
+            return mode == null
+                ? $"Data Source={path};Pooling=False"
+                : $"Data Source={path};{mode};Pooling=False";
         }
 
         /// <summary>
@@ -184,7 +226,7 @@ namespace ACE.Database.Tests
         /// </summary>
         private static void CreateRollbackJournalledDatabase(string path)
         {
-            using var connection = new SqliteConnection($"Data Source={path}");
+            using var connection = new SqliteConnection(Probe(path));
             connection.Open();
 
             using var command = connection.CreateCommand();
@@ -196,7 +238,7 @@ namespace ACE.Database.Tests
 
         private static string CurrentJournalMode(string path)
         {
-            using var connection = new SqliteConnection($"Data Source={path};Mode=ReadOnly");
+            using var connection = new SqliteConnection(Probe(path, "Mode=ReadOnly"));
             connection.Open();
 
             using var command = connection.CreateCommand();
