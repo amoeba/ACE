@@ -263,12 +263,33 @@ longer `[JsonIgnore]`d, so it is overridable from Config.js rather than only by
 rebuilding. Pinned by `Source/ACE.Database.Tests/SqliteConnectionStringTests.cs`
 (verified to fail when the old default is restored).
 
-**Test:** both suites re-run. The concurrency soak below is still outstanding.
+**Test:** both suites re-run. The concurrency soak below is now written.
 
-**Test still owed:** **a concurrency soak** asserting zero `SQLITE_BUSY` /
-`SQLITE_LOCKED` under contention. Neither existing suite creates any contention
-between connections, which is part of why this defect went unnoticed. That remains
-the honest way to close the item; the connection-string test only pins the setting.
+**Concurrency soak:** `SqliteConcurrencySoakTests`, 2 tests of 25 iterations each.
+It opens a reader that has executed its `SELECT` and left the result open -- the shape
+of an ACE read between operations -- and asserts a write on another connection
+succeeds immediately, with a second test doing the same against four readers.
+
+The scenario had to be chosen carefully, and the wrong choice is a test that cannot
+fail. A reader holding an explicit read transaction (`BEGIN` then `SELECT`,
+transaction left open) blocks a writer for the whole busy timeout **even in a
+healthy WAL database** -- measured at 30,075ms and SQLITE_BUSY. That is normal
+SQLite behaviour, not the defect. The defect is narrower: a connection that has
+merely executed a `SELECT` and left the reader open, with no transaction, blocks a
+writer under shared cache (30,060ms, SQLITE_LOCKED) and does not under pooling (0ms).
+That is the scenario the soak uses.
+
+The connection string is the one `DbProvider` generates, with `ConnectionOptions`
+left at the production default rather than set by the test -- setting it would make
+the soak test a string of its own and a regression would pass unnoticed. Only the
+busy timeout is shortened, to 5s, so a real regression costs seconds instead of
+twenty-five minutes; the production value is pinned separately by
+`SqliteConnectionStringTests`.
+
+Verified by mutation. Restoring the `Cache=Shared` default fails both tests, and
+fails fast: the soak asserts its own premise (pooling on, shared cache off) before
+contending, so a regressed default is caught in milliseconds rather than after a
+busy timeout per iteration.
 
 ---
 
