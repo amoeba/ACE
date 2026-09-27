@@ -1,0 +1,345 @@
+# Validates the optional SQLite backend against both providers.
+#
+# TEMPORARY. This exists to validate prototype/sqlite-backend on Windows x64,
+# which is the one platform the branch has never been exercised on, and to give
+# the SQLite path any automated coverage at all. AppVeyor/Config.js has no
+# Database.Provider key, so DbProvider.Active resolves to MySQL and the entire
+# SQLite backend is dead code in the project's existing pipeline.
+#
+# The project builds on AppVeyor, not GitHub Actions. This is additive and does
+# not replace anything: AppVeyor still owns releases, packaging and deploys.
+#
+# Not proposed for upstream as-is. See the note at the bottom.
+
+name: SQLite backend
+
+on:
+  push:
+    branches: [prototype/sqlite-backend]
+  pull_request:
+    branches: [master, prototype/sqlite-backend]
+
+# A new push supersedes an in-flight run for the same ref.
+concurrency:
+  group: sqlite-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in sync with AppVeyor/dbversion.txt. The SQLite artifact is converted
+  # from the same world release, so the two legs must assert against the same
+  # content or a diff between them means nothing.
+  WORLD_VERSION: "0.9.295"
+
+  # Published at amoeba/ace-to-sqlite. Pinned by tag AND digest: the config
+  # default floats on releases/latest, which would let a newly published
+  # artifact silently change what CI validates.
+  SQLITE_WORLD_URL: "https://github.com/amoeba/ace-to-sqlite/releases/download/v0.9.295/ace_world_patches.db"
+  SQLITE_WORLD_SHA256: "35e0811935d6e216a33c4fde5913b41abc0e7c53435342336ca15d0bd4219f3e"
+
+  # Matches what AppVeyor provisions, so both pipelines use identical
+  # credentials.
+  MYSQL_ROOT_PASSWORD: "Password12!"
+
+jobs:
+  test:
+    name: ${{ matrix.provider }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    strategy:
+      # One leg failing should not hide the other's result. That is the entire
+      # point of running both.
+      fail-fast: false
+      matrix:
+        provider: [sqlite, mysql]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Source/ACE.sln') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # ---------------------------------------------------------------------
+      # MySQL only.
+      #
+      # GitHub Actions `services:` requires a container runtime, which Windows
+      # runners do not have, so the preinstalled MySQL service is started
+      # directly. AppVeyor does the same with `Start-Service MySQL80`.
+      # ---------------------------------------------------------------------
+      - name: Start MySQL (mysql)
+        if: matrix.provider == 'mysql'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $svc = Get-Service -Name 'MySQL*' -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Status -eq 'Stopped' } |
+                 Select-Object -First 1
+          if (-not $svc) { throw 'No stopped MySQL service found on the runner.' }
+          Write-Host "Starting service $($svc.Name)"
+          Start-Service -Name $svc.Name
+          $svc.WaitForStatus('Running', [TimeSpan]::FromMinutes(2))
+
+          $mysql = (Get-Command mysql.exe -ErrorAction Stop).Source
+          Write-Host "mysql.exe: $mysql"
+
+          # The runner image ships root with an empty password. Tolerate either
+          # state so this does not become the reason the job fails.
+          $authenticated = $false
+          foreach ($pw in @('', $env:MYSQL_ROOT_PASSWORD)) {
+            $args = @('-u', 'root', '-N', '-e', 'SELECT 1;')
+            if ($pw) { $args = @('-u', 'root', "-p$pw", '-N', '-e', 'SELECT 1;') }
+            & $mysql @args *> $null
+            if ($LASTEXITCODE -eq 0) {
+              $authenticated = $true
+              if (-not $pw) {
+                Write-Host 'root has an empty password; setting it'
+                & $mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$($env:MYSQL_ROOT_PASSWORD)';"
+              }
+              break
+            }
+          }
+          if (-not $authenticated) { throw 'Could not authenticate to MySQL as root.' }
+
+          & $mysql -u root "-p$($env:MYSQL_ROOT_PASSWORD)" -N -e 'SELECT VERSION();'
+
+      # ---------------------------------------------------------------------
+      # Build
+      #
+      # -p:Platform=x64 is required on both build and test, and not optional.
+      # The csproj declares <Platforms>x64</Platforms>, so a bare `dotnet build`
+      # emits bin/x64/Release -- but a bare `dotnet test` then looks for
+      # bin/Release and either reports "argument is invalid" or, worse, runs
+      # against a stale directory. AppVeyor avoids this by setting
+      # `platform: x64` globally; GitHub Actions has no equivalent, so it has to
+      # be passed explicitly and identically to both commands.
+      #
+      # Both test projects reference ACE.Server, so this builds the server too
+      # and runs its DatabaseSetupScripts link step.
+      # ---------------------------------------------------------------------
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet build Source/ACE.Server.Tests/ACE.Server.Tests.csproj -c Release -p:Platform=x64 -v minimal
+          dotnet build Source/ACE.Database.Tests/ACE.Database.Tests.csproj -c Release -p:Platform=x64 -v minimal
+
+      # ---------------------------------------------------------------------
+      # Config.js
+      #
+      # Config.js is gitignored, so CI has to synthesise it. It is generated
+      # from AppVeyor/Config.js -- the same template the existing pipeline uses
+      # -- with a provider overlay, so the MySQL leg differs from AppVeyor only
+      # in DatFilesDirectory.
+      #
+      # The SQLite paths are absolute and shared by both test assemblies. That
+      # is deliberate, and it is also a caveat: DbProvider.ResolveSqlitePath
+      # resolves relative paths against the working directory, which differs per
+      # test project, so relative paths would silently hand each assembly its own
+      # private copy of the world database. Absolute paths route every process at
+      # one file.
+      #
+      # The flip side is that this workflow therefore CANNOT catch that bug. See
+      # issues.md item 1.
+      # ---------------------------------------------------------------------
+      - name: Generate Config.js
+        shell: pwsh
+        env:
+          PROVIDER: ${{ matrix.provider }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $config = Get-Content AppVeyor/Config.js -Raw
+
+          # Landblock preloading reads client_cell_1.dat on a background thread
+          # spawned by WorldManager.Initialize. With no .dat files that thread
+          # throws an unhandled NullReferenceException and takes the whole test
+          # host down, so the run is aborted rather than reported as a failure.
+          # Worse, it is a race: the results sometimes get reported before the
+          # thread dies, which makes this flaky instead of reliably red.
+          #
+          # Disabling it is correct here and only here. Preloading is a
+          # no-op-by-necessity without the .dat files, and Config.js.example
+          # ships it as true because a real deployment has them.
+          $config = $config -replace '"Server":\s*\{', ('"Server": {' + "`n" + '    "LandblockPreloading": false,'), 1
+
+          # Forward slashes throughout. .NET accepts them on Windows, and it
+          # keeps the JSON free of backslash escaping.
+          $datDir = (Join-Path $env:RUNNER_TEMP 'nodats') -replace '\\', '/'
+          New-Item -ItemType Directory -Force -Path $datDir | Out-Null
+          $config = $config -replace '"DatFilesDirectory":\s*"[^"]*"', ('"DatFilesDirectory": "' + $datDir + '"')
+
+          $dbDir = (Join-Path $env:GITHUB_WORKSPACE 'db') -replace '\\', '/'
+          New-Item -ItemType Directory -Force -Path $dbDir | Out-Null
+
+          if ($env:PROVIDER -eq 'sqlite') {
+            $overlay = @(
+              '  "Database": {'
+              '    "Provider": "sqlite",'
+              '    "AutoCreate": true'
+              '  },'
+              '  "Sqlite": {'
+              ('    "Authentication": { "Database": "' + $dbDir + '/ace_auth.db" },')
+              ('    "Shard":         { "Database": "' + $dbDir + '/ace_shard.db" },')
+              ('    "World":         { "Database": "' + $dbDir + '/ace_world.db" }')
+              '  },'
+            ) -join "`n"
+
+            # [regex]::Replace with an explicit count. The -replace operator has
+            # no count overload and would rewrite every brace in the file.
+            # AppVeyor/Config.js opens with '{' on line 1, so the first match is
+            # the root object. The overlay goes AFTER that brace -- inserted
+            # before it, the document would start with a bare key and fail to
+            # parse.
+            $config = ([regex]'\{').Replace($config, "{`n" + $overlay, 1)
+          }
+          # else: no Database key at all, which is exactly what AppVeyor ships.
+          # DbProvider.Active falls back to MySQL, so this leg validates the
+          # unchanged default path.
+
+          # WriteAllText rather than Set-Content: Set-Content -Encoding UTF8
+          # emits a BOM under Windows PowerShell, and ConfigManager's JSON
+          # reader is not expected to want one.
+          [System.IO.File]::WriteAllText(
+            (Join-Path $env:GITHUB_WORKSPACE 'Source\ACE.Server\Config.js'),
+            $config)
+
+          Write-Host '--- generated Config.js (head) ---'
+          Get-Content Source/ACE.Server/Config.js -TotalCount 12
+
+      # ---------------------------------------------------------------------
+      # World database
+      # ---------------------------------------------------------------------
+      - name: Fetch SQLite world database (sqlite)
+        if: matrix.provider == 'sqlite'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dest = Join-Path $env:GITHUB_WORKSPACE 'db\ace_world.db'
+          $tmp = "$dest.download"
+
+          Write-Host "downloading $env:SQLITE_WORLD_URL"
+          Invoke-WebRequest -Uri $env:SQLITE_WORLD_URL -OutFile $tmp
+
+          $actual = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:SQLITE_WORLD_SHA256) {
+            throw "Digest mismatch. expected $env:SQLITE_WORLD_SHA256 actual $actual"
+          }
+          Write-Host "digest ok: $actual"
+          Move-Item -Path $tmp -Destination $dest -Force
+
+          # This artifact is published with numeric columns declared TEXT.
+          # SqliteBootstrapper.NormalizeWorldDatabaseTypes repairs them on first
+          # open and logs which tables it rebuilt, so an unrepaired artifact is
+          # visible in the boot log rather than silent.
+
+      - name: Import MySQL world database (mysql)
+        if: matrix.provider == 'mysql'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content AppVeyor/dbversion.txt -Raw).Trim()
+          Write-Host "dbversion.txt says $version, workflow pins $($env:WORLD_VERSION)"
+
+          $url = "https://github.com/ACEmulator/ACE-World-16PY-Patches/releases/download/v$version/ACE-World-Database-v$version.sql.zip"
+          $zip = Join-Path $env:RUNNER_TEMP "world-v$version.sql.zip"
+
+          Write-Host "downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+
+          $sql = Get-ChildItem -Path $env:RUNNER_TEMP -Filter '*.sql' |
+                 Select-Object -First 1 -ExpandProperty FullName
+          if (-not $sql) { throw "No .sql found after extracting $zip" }
+
+          $mysql = (Get-Command mysql.exe -ErrorAction Stop).Source
+          $pw = "-p$($env:MYSQL_ROOT_PASSWORD)"
+
+          & $mysql -h 127.0.0.1 -u root $pw -e 'CREATE DATABASE IF NOT EXISTS ace_world;'
+
+          # cmd redirection rather than piping: the dump is well over a gigabyte
+          # and Get-Content -Raw would hold it all in memory and re-encode it.
+          # This is also what AppVeyor's DownloadACEWorld.bat does.
+          Write-Host "importing $sql (several minutes)"
+          $cmdline = '"' + $mysql + '" -h 127.0.0.1 -u root ' + $pw + ' ace_world < "' + $sql + '"'
+          cmd /c $cmdline
+          if ($LASTEXITCODE -ne 0) { throw "World database import failed ($LASTEXITCODE)" }
+
+          & $mysql -h 127.0.0.1 -u root $pw -N -e 'SELECT COUNT(*) FROM ace_world.weenie;'
+
+      # ---------------------------------------------------------------------
+      # Test
+      #
+      # ACE.Server.Tests copies Source/ACE.Server/Config.js into its own output
+      # directory, so generating it above is enough for both suites.
+      # ---------------------------------------------------------------------
+      - name: Test (server)
+        shell: pwsh
+        run: |
+          dotnet test Source/ACE.Server.Tests/ACE.Server.Tests.csproj `
+            -c Release -p:Platform=x64 --no-build --logger "trx;LogFileName=server.trx" `
+            --results-directory $env:RUNNER_TEMP/results
+
+      - name: Test (database)
+        shell: pwsh
+        run: |
+          dotnet test Source/ACE.Database.Tests/ACE.Database.Tests.csproj `
+            -c Release -p:Platform=x64 --no-build --logger "trx;LogFileName=database.trx" `
+            --results-directory $env:RUNNER_TEMP/results
+
+      # Both suites must leave the shard at zero rows. A test that commits a
+      # character and does not clean up is a real failure, not a flake, and it
+      # only shows up on a second run against the same database.
+      - name: Assert the shard was left clean (sqlite)
+        if: matrix.provider == 'sqlite'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $db = ((Join-Path $env:GITHUB_WORKSPACE 'db\ace_shard.db') -replace '\\', '/')
+          $code = 'import sqlite3;c=sqlite3.connect("file:' + $db + '?mode=ro",uri=True);print(c.execute("SELECT COUNT(*) FROM character").fetchone()[0])'
+          $count = & python -c $code
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read the shard database.' }
+          if ([int]$count -ne 0) { throw "Shard left with $count character(s); a test did not clean up." }
+          Write-Host "shard clean (character=$count)"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.provider }}
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+
+      - name: Upload databases (sqlite)
+        if: always() && matrix.provider == 'sqlite'
+        uses: actions/upload-artifact@v4
+        with:
+          # Keeping the world database lets a failed run be investigated without
+          # a second 130MB download, and the bootstrapper's rebuild is visible
+          # by diffing the schema against the published artifact.
+          name: sqlite-databases
+          path: ${{ github.workspace }}/db
+          if-no-files-found: ignore
+          retention-days: 7
+
+# ---------------------------------------------------------------------------
+# Not proposed for upstream as-is.
+#
+# If this graduates, two things have to be settled first:
+#
+#  1. The world database on the SQLite leg comes from amoeba/ace-to-sqlite, a
+#     third-party repository. The project's own releases publish a .sql.zip and
+#     nothing else, so this job depends on an artifact nobody upstream
+#     maintains. See questions.md item 2.
+#
+#  2. Pinning by digest means a new world release fails this job until someone
+#     updates WORLD_VERSION and SQLITE_WORLD_SHA256. That is the correct
+#     trade-off for a validation job, and the wrong one for a merge gate.
+# ---------------------------------------------------------------------------
