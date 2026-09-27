@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 
 using ACE.Common;
 using ACE.Common.Performance;
+using ACE.DatLoader;
 using ACE.Entity;
 using ACE.Entity.Enum;
 using ACE.Server.Entity;
@@ -87,6 +88,20 @@ namespace ACE.Server.Managers
             {
                 log.Info("Preloading Landblocks Disabled...");
                 log.Warn("Events may not function correctly as Preloading of Landblocks has disabled.");
+                return;
+            }
+
+            // A missing client_cell_1.dat leaves CellDat null, and Landblock..ctor reads
+            // it unconditionally -- so preloading without the .dat files is a null
+            // dereference. Because this runs on a background thread with no handler,
+            // that dereference takes the whole process down rather than surfacing as a
+            // failure. DatManager logs the missing file and continues; this guard stops
+            // the continuation from ever reaching the dereference.
+            if (DatManager.CellDat == null)
+            {
+                log.Error("Preloading Landblocks requires client_cell_1.dat, which was not loaded. " +
+                          "Point DatFilesDirectory at a directory containing the .dat files, or set " +
+                          "Server.LandblockPreloading to false to start without preloaded landblocks.");
                 return;
             }
 

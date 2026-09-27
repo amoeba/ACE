@@ -143,6 +143,17 @@ jobs:
           brace = config.index("{")
           config = config[:brace + 1] + "\n" + overlay + config[brace + 1:]
 
+          # LandblockPreloading lives inside the Server block, not at the top level.
+          # The runner has no .dat files, so preloading would only produce an error
+          # log (and, before the guard in LandblockManager, a null dereference on a
+          # background thread). Disabling it here keeps the CI boot log clean; the
+          # product guard is what makes it safe, this is what makes it quiet.
+          server_key = '"Server": {'
+          server = config.index(server_key)
+          config = (config[:server + len(server_key)] +
+                    '\n    "LandblockPreloading": false,' +
+                    config[server + len(server_key):])
+
           dest = pathlib.Path("Source/ACE.Server/Config.js")
           dest.write_text(config)
           print("--- generated Config.js (head) ---")

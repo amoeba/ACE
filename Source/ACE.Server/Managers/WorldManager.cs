@@ -57,8 +57,21 @@ namespace ACE.Server.Managers
         {
             var thread = new Thread(() =>
             {
-                LandblockManager.PreloadConfigLandblocks();
-                UpdateWorld();
+                // An unhandled exception on a thread pool or background thread takes the
+                // whole process down, and on this thread it would do so after the port
+                // was already listening -- so the failure looks like a server that
+                // accepted connections and then vanished. Catching here turns it into a
+                // log line naming the cause, which is strictly more useful. The work
+                // below is not optional, so a failure still has to be visible.
+                try
+                {
+                    LandblockManager.PreloadConfigLandblocks();
+                    UpdateWorld();
+                }
+                catch (Exception ex)
+                {
+                    log.Error($"World Manager thread failed: {ex}");
+                }
             });
             thread.Name = "World Manager";
             thread.Priority = ThreadPriority.AboveNormal;

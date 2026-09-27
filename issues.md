@@ -150,9 +150,9 @@ both test projects can see, which is why it was not done here.
 ## 2b. A background thread kills the test host when `.dat` files are absent
 
 **Severity:** medium — presents as a flake, not a failure
-**Files:** `ACE.Server/Managers/WorldManager.cs:60`,
-`ACE.Server/Managers/LandblockManager.cs:127`,
-`ACE.Server/Entity/Landblock.cs:174`
+**Status:** fixed
+**Files:** `ACE.Server/Managers/WorldManager.cs`, `ACE.Server/Managers/LandblockManager.cs`,
+`ACE.Server/Entity/Landblock.cs`
 
 `WorldManager.Initialize` spawns landblock preloading on a background thread.
 `PreloadConfigLandblocks` is gated on `Server.LandblockPreloading`, which
@@ -176,6 +176,39 @@ with no indication that the cause is a missing data file. `DatManager`
 already logs a clear `FileNotFoundException` message for exactly this case and
 then lets startup continue into the dereference. An explicit guard, or failing
 fast with that message, would be kinder.
+
+**Resolution.** Both fixes, because they address different halves.
+
+The product fix is the guard. `PreloadConfigLandblocks` now checks
+`DatManager.CellDat` before it reaches `Landblock..ctor` and returns with a
+message naming the cause and the two ways out (point `DatFilesDirectory` at a
+real `.dat` set, or set `LandblockPreloading` to false). `DatManager` logs the
+missing file and continues; the guard stops the continuation from reaching the
+dereference. That is the half that helps a developer who has not configured
+their `.dat` files.
+
+The second half is that an unhandled exception on that background thread takes
+the whole process down *after the port is already listening*, which is why it
+presented as a flake rather than a failure. `WorldManager.Initialize` now wraps
+the thread body in a catch that logs the exception, so a failure there is a log
+line naming the cause rather than a server that accepted connections and
+vanished. The work is not optional, so it is still logged as an error.
+
+The CI fix sets `LandblockPreloading: false` in the generated config, which is
+correct on a runner where the `.dat` files are absent. The product guard is what
+makes it safe; this is what makes the boot log quiet.
+
+**Test:** `LandblockPreloadTests` in `ACE.Server.Tests`. It calls
+`PreloadConfigLandblocks` directly with `CellDat` null and asserts no exception.
+It is called on the test thread rather than a background thread deliberately, so
+a missing guard is a test failure rather than a crashed host — the same defect,
+one layer closer and therefore observable. It does not call `TestEnvironment`,
+which would hit the same dereference through `WorldManager.Initialize`. Verified
+by mutation: removing the guard fails it.
+
+This is also why `ACE.Server.Tests` can now be run one class at a time — the
+class that used to abort the run is the one this guard protects, and the guard
+is what makes the filtered run safe.
 
 ---
 
