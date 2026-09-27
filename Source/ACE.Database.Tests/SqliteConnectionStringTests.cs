@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Linq;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 using ACE.Common;
@@ -125,6 +127,67 @@ namespace ACE.Database.Tests
             Assert.AreEqual(DatabaseProvider.Sqlite, new DatabaseProviderConfiguration { Provider = "sqlite" }.Resolve());
             Assert.AreEqual(DatabaseProvider.Sqlite, new DatabaseProviderConfiguration { Provider = "SQLite" }.Resolve(),
                 "Provider should be parsed case-insensitively");
+        }
+
+        [TestMethod]
+        public void WorldDatabase_IsOpenedReadOnly()
+        {
+            // ACE never writes to the world database, and it is the one file a developer
+            // cannot regenerate -- the pre-converted artifact has to be re-fetched. A
+            // connection that cannot write means a bug in the read path cannot corrupt
+            // it. See SQLITE_PRODUCTION.md 4.1.
+            var saved = ConfigManager.Config;
+
+            try
+            {
+                var path = Path.Combine(Path.GetTempPath(), "ace-world-readonly-" + Guid.NewGuid().ToString("N") + ".db");
+
+                ConfigManager.Initialize(new MasterConfiguration
+                {
+                    Database = new DatabaseProviderConfiguration { Provider = "sqlite" },
+                    Sqlite   = new SqliteConfiguration
+                    {
+                        World = new SqliteDatabaseConfiguration { Database = path }
+                    }
+                });
+
+                var connectionString = ACE.Database.DbProvider.SqliteConnectionString(DatabaseKind.World);
+
+                Assert.IsTrue(
+                    connectionString.IndexOf("Mode=ReadOnly", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"The world connection string is not read-only: '{connectionString}'.");
+
+                // Create the file first, so the read-only open has something to open.
+                using (var create = new SqliteConnection($"Data Source={path};Pooling=False"))
+                {
+                    create.Open();
+                    using var command = create.CreateCommand();
+                    command.CommandText = "CREATE TABLE t (id INTEGER);";
+                    command.ExecuteNonQuery();
+                }
+
+                // And it behaves read-only: a write against it fails rather than succeeding.
+                using var connection = new SqliteConnection(connectionString);
+                connection.Open();
+
+                using var write = connection.CreateCommand();
+                write.CommandText = "INSERT INTO t (id) VALUES (1);";
+
+                try
+                {
+                    write.ExecuteNonQuery();
+                    Assert.Fail("a write against the world database should have failed with SQLITE_READONLY");
+                }
+                catch (SqliteException ex)
+                {
+                    Assert.AreEqual(8, ex.SqliteErrorCode,
+                        "a write against the world database should fail with SQLITE_READONLY (8)");
+                }
+            }
+            finally
+            {
+                ConfigManager.Initialize(saved);
+            }
         }
     }
 }

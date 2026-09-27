@@ -418,7 +418,8 @@ configuration.
 ## 7. §4.1 — world database is opened read-write at runtime
 
 **Severity:** low
-**File:** `Source/ACE.Database/WorldDatabase.cs`
+**Status:** fixed
+**File:** `Source/ACE.Database/DbProvider.cs`, `Source/ACE.Database/SqliteBootstrapper.cs`
 
 ACE never writes to the world database. It is opened read-write anyway, which
 means a bug anywhere in the read path could corrupt the one file a developer
@@ -431,6 +432,27 @@ cannot easily regenerate — the pre-converted artifact has to be re-fetched.
 database is not already WAL, and succeeds if it is — which is what
 `SqlitePragmaTests.AlreadyWalOnAReadOnlyConnection_IsAccepted` pins. Whoever does
 this should re-run those four tests rather than assume they still pass.
+
+**Resolution.** `SqliteConnectionString` appends `;Mode=ReadOnly` for the world
+database only; auth and shard stay read-write because they are written constantly.
+
+The interaction the note warns about is real but does not bite: the world
+database is already in WAL mode by the time anything opens it read-only, so the
+interceptor's `journal_mode=WAL` succeeds on the read-only connection. All four
+pragma tests were re-run and pass.
+
+The complication the note does not mention is creation. A database that does not
+exist yet cannot be opened read-only — SQLite fails with `SQLITE_CANTOPEN` — and
+two bootstrap operations create or repair the world file through the same context:
+`EnsureWorldSchema` builds it from the EF model, and `NormalizeWorldDatabaseTypes`
+rebuilds its columns. Both now use a writable connection to the same path, leaving
+the runtime connection read-only. `EnsureWorldSchema` does this by handing EF a
+pre-configured options builder, which `OnConfiguring` leaves alone.
+
+**Test:** `SqliteConnectionStringTests.WorldDatabase_IsOpenedReadOnly`. It asserts
+the world connection string carries `Mode=ReadOnly`, then opens it against a real
+file and asserts a write fails with `SQLITE_READONLY` (8) — the behaviour, not just
+the string. Verified by mutation: removing `Mode=ReadOnly` fails it.
 
 ---
 

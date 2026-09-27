@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 using log4net;
@@ -306,7 +307,19 @@ namespace ACE.Database
 
             var created = !File.Exists(path);
 
-            using var context = new ACE.Database.Models.World.WorldDbContext();
+            // The world connection string carries Mode=ReadOnly for the runtime, but a
+            // database that does not exist yet cannot be opened read-only -- SQLite
+            // fails with SQLITE_CANTOPEN. Creating the schema is a bootstrap operation,
+            // so it uses a writable connection to the same path. OnConfiguring leaves
+            // a pre-configured options builder alone, so this is the connection that
+            // gets used.
+            var connectionString = DbProvider.SqliteConnectionString(DatabaseKind.World).Replace(";Mode=ReadOnly", "");
+
+            var options = new DbContextOptionsBuilder<ACE.Database.Models.World.WorldDbContext>()
+                .UseSqlite(connectionString)
+                .Options;
+
+            using var context = new ACE.Database.Models.World.WorldDbContext(options);
             context.Database.EnsureCreated();
             StampUserVersion(context);
 
@@ -391,10 +404,16 @@ namespace ACE.Database
             try
             {
                 using var context = new ACE.Database.Models.World.WorldDbContext();
-                using var connection = context.Database.GetDbConnection();
 
-                if (connection.State != System.Data.ConnectionState.Open)
-                    connection.Open();
+                // The world connection string carries Mode=ReadOnly so the runtime
+                // cannot write to the one file that is expensive to regenerate. This
+                // method is the exception: it exists to repair that file, so it needs a
+                // writable connection. The context supplies the model; only the
+                // connection is rebuilt, without Mode=ReadOnly and pointing at the same
+                // path.
+                var connectionString = context.Database.GetDbConnection().ConnectionString.Replace(";Mode=ReadOnly", "");
+                using var connection = new SqliteConnection(connectionString);
+                connection.Open();
 
                 // table -> columns that need rebuilding, with their intended type.
                 var affected = new Dictionary<string, Dictionary<string, string>>();

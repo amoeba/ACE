@@ -291,7 +291,14 @@ namespace ACE.Database
                 _                          => throw new ArgumentOutOfRangeException(nameof(kind))
             };
 
-            return $"Data Source={ResolveSqlitePath(kind)};{cfg.ConnectionOptions}";
+            // The world database is opened read-only. ACE never writes to it -- see
+            // SQLITE_PRODUCTION.md 4.1 for the write-path audit -- and it is the one
+            // file a developer cannot regenerate, so a bug anywhere in the read path
+            // should not be able to corrupt it. The auth and shard databases are
+            // written constantly and stay read-write.
+            var mode = kind == DatabaseKind.World ? ";Mode=ReadOnly" : "";
+
+            return $"Data Source={ResolveSqlitePath(kind)};{cfg.ConnectionOptions}{mode}";
         }
 
         public static string MySqlConnectionString(DatabaseKind kind, bool includeDatabase = true)
