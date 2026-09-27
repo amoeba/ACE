@@ -29,6 +29,10 @@ services:
       - ./Dats:/ace/Dats
       - ./Logs:/ace/Logs
       - ./Mods:/ace/Mods
+      # Only needed for the sqlite provider. Without it the .db files are written
+      # into the container's writable layer and lost on restart -- including the
+      # world database, which then has to be re-downloaded.
+      - ./db:/ace/db
     ports:
       - "9000-9001:9000-9001/udp"
     stdin_open: true

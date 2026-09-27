@@ -1,0 +1,138 @@
+# Validates the optional SQLite backend.
+#
+# TEMPORARY. This exists to give the SQLite path any automated coverage at all,
+# and to exercise the branch on a platform the project's own pipeline never
+# touches. AppVeyor/Config.js has no Database.Provider key, so DbProvider.Active
+# resolves to MySQL and the SQLite backend is dead code in the only pipeline that
+# runs tests.
+#
+# The project builds on AppVeyor, not GitHub Actions. This is additive and does
+# not replace anything: AppVeyor still owns releases, packaging and deploys, and
+# still owns MySQL.
+#
+# Two modes, because they answer different questions. Both live in
+# sqlite-backend.yml; this file only decides when each one runs.
+#
+#   fixture (every push and PR)
+#       EnsureDatabases builds auth, shard and world from the EF model, and the
+#       suite seeds the two rows its weenie lookups need. Nothing is downloaded.
+#       This asks "does the branch work", and it depends on no artifact that
+#       anyone else has to publish -- which is the main reason it could be
+#       merged upstream as it stands.
+#
+#   release (manual, workflow_dispatch)
+#       Downloads the published world database, pinned by tag and digest, and
+#       runs the same suite against it. This asks "is the thing we would actually
+#       hand someone still good", which a self-built fixture cannot answer: the
+#       fixture's column types are correct by construction, so the TEXT-affinity
+#       repair in SqliteBootstrapper.NormalizeWorldDatabaseTypes is a no-op
+#       against it, and a 2-row database says nothing about whether the 43,913
+#       weenies and 6,266 spells survived the MySQL -> SQLite conversion.
+#
+# Two jobs rather than one job with a two-entry matrix, because a job-level `if`
+# cannot reference the matrix context -- it is evaluated before the matrix
+# expands. An earlier revision did exactly that and the whole workflow was
+# rejected before a single job started:
+#
+#   Invalid workflow file .github/workflows/sqlite-backend-ci.yml#L1
+#   (Line: 83, Col: 9): Unrecognized named-value: 'matrix'. Located at position 1
+#   within expression: matrix.world == 'fixture' || (...)
+#
+# Not proposed for upstream as-is. See the note at the bottom.
+
+name: SQLite backend
+
+on:
+  push:
+    branches: [sqlite]
+  pull_request:
+    # Filtered on the BASE branch, not the head. The PR targets master.
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      fidelity:
+        description: Also validate the published world database (slow, needs network)
+        type: boolean
+        default: true
+
+# A new push supersedes an in-flight run for the same ref.
+concurrency:
+  group: sqlite-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The gate. Self-provisions everything, so it needs no network, no artifact and
+  # no credentials, and it is the half of this that could be merged upstream.
+  fixture:
+    name: fixture
+    uses: ./.github/workflows/sqlite-backend.yml
+    with:
+      world: fixture
+      # Empty means "build the world schema from the EF model". Spelled out here
+      # rather than defaulted in the called workflow, because the caller's
+      # SqliteConfiguration default is a non-empty releases/latest URL and
+      # leaving it implicit is how 130MB gets downloaded by accident.
+      world_url: ''
+
+  # Provenance matters more than speed here, and a digest pin is the right
+  # trade-off for a validation job. Converted from the same world release
+  # AppVeyor uses: AppVeyor/dbversion.txt is 0.9.295 and this tag is v0.9.295, so
+  # they have to move together or the two pipelines validate different content.
+  #
+  # Published at amoeba/ace-to-sqlite. Pinned by tag AND digest, because the
+  # config default floats on releases/latest, which would let a newly published
+  # artifact silently change what this validates.
+  release:
+    name: release
+    if: github.event_name == 'workflow_dispatch' && inputs.fidelity
+    uses: ./.github/workflows/sqlite-backend.yml
+    with:
+      world: release
+      world_url: 'https://github.com/amoeba/ace-to-sqlite/releases/download/v0.9.295/ace_world_patches.db'
+      world_sha256: '35e0811935d6e216a33c4fde5913b41abc0e7c53435342336ca15d0bd4219f3e'
+
+# ---------------------------------------------------------------------------
+# Not proposed for upstream as-is.
+#
+# If this graduates, three things have to be settled first:
+#
+#  1. Release mode's world database comes from amoeba/ace-to-sqlite, a
+#     third-party repository. The project's own releases publish a .sql.zip and
+#     nothing else, so that job depends on an artifact nobody upstream
+#     maintains. See questions.md item 2.
+#     Fixture mode has no such dependency and is the half that could merge.
+#
+#  2. Pinning by digest means a new world release fails release mode until
+#     someone updates the pin. That is the right trade-off for a validation job
+#     and the wrong one for a merge gate, which is the other reason it stays
+#     opt-in.
+#
+#  3. Coverage is narrower than AppVeyor's on purpose, because the two providers
+#     cannot both be served here: GitHub's runners cannot host a service
+#     container, so there is no MySQL to test against. AppVeyor remains the
+#     MySQL gate; this job is the SQLite one.
+#
+# Four further gaps, all deliberate and all invisible to this workflow:
+#
+#  4. x64 only. ACE.sln declares no arm64 solution configuration, so -p:Platform
+#     cannot be switched to match an arm64 runner without MSB4126. That is
+#     cosmetic rather than structural -- no project sets PlatformTarget, so the
+#     output is architecture-neutral IL and the apphost follows the host -- but
+#     it does mean arm64 Linux is untested here rather than supported.
+#
+#  5. ACE.Server.Tests runs only 3 of its 5 classes even under a filter, and
+#     even those run under MySQL rather than SQLite -- DbProvider.Active
+#     swallows an uninitialised ConfigManager and falls back to MySQL, and
+#     nothing in a filtered run calls ConfigManager.Initialize. So they are not
+#     evidence that the SQLite provider resolves. Making them meaningful needs
+#     an explicit config initialisation step, not just a filter.
+#
+#  6. The absolute SQLite paths above route around the ResolveSqlitePath
+#     working-directory bug, so this workflow cannot catch it by running the
+#     server the way a service manager would. SqlitePathResolutionTests does
+#     catch it, and does run here. See issues.md item 1.
+#
+#  7. Fixture mode proves the schema and the query path, not the data. A green
+#     fixture run and a green release run are not the same claim, which is why
+#     release mode exists rather than the fixture having replaced it.
+# ---------------------------------------------------------------------------

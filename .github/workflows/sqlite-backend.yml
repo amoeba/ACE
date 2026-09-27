@@ -1,0 +1,327 @@
+# Reusable body of the SQLite backend validation, one run per source of the
+# world database. Called by sqlite-backend-ci.yml, which decides when each mode
+# runs; the mode itself is an input, not a matrix, so that gating a job on it
+# does not depend on the matrix context.
+#
+# A job-level `if` cannot reference `matrix` -- it is evaluated before the
+# matrix expands, and actionlint rejects it outright:
+#
+#   context "matrix" is not allowed here. available contexts are
+#   "github", "inputs", "needs", "vars".
+#
+# That is why this is a called workflow taking an input rather than one job with
+# a two-entry matrix. It also means the two modes cannot drift apart, which they
+# would if the steps were duplicated per job.
+#
+# Runs ubuntu-latest x64. The arm64 question is deliberately not answered here;
+# see the caller.
+
+name: SQLite backend (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      world:
+        description: 'fixture for a self-built empty world database, release for the published one'
+        type: string
+        required: true
+      world_url:
+        description: World database to download when world is "release"; empty means self-provision
+        type: string
+        default: ''
+      world_sha256:
+        description: Expected digest of world_url
+        type: string
+        default: ''
+
+jobs:
+  test:
+    name: ${{ inputs.world }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Source/ACE.sln') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # ---------------------------------------------------------------------
+      # Build the whole solution, not just the project under test.
+      #
+      # The branch touches ACE.Server, ACE.Common, ACE.Database and
+      # ACE.Server.Tests, and only ACE.Database.Tests is run below. Building
+      # the solution is what catches a compile break in the parts that are not
+      # executed.
+      #
+      # -p:Platform=x64 is required, not optional. ACE.sln declares only
+      # Debug|x64 and Release|x64, so omitting it fails outright with MSB4126.
+      # It also has to be passed identically to build and test below -- see the
+      # note on the test step.
+      # ---------------------------------------------------------------------
+      - name: Build
+        run: dotnet build Source/ACE.sln -c Release -p:Platform=x64 -v minimal
+
+      # ---------------------------------------------------------------------
+      # Config.js
+      #
+      # Config.js is gitignored, so CI has to synthesise it. It is generated
+      # from AppVeyor/Config.js -- the same template the existing pipeline uses
+      # -- with a SQLite overlay, so the config under test differs from
+      # AppVeyor's only in DatFilesDirectory and the added Database/Sqlite keys.
+      #
+      # The overlay is applied as text rather than by parsing and re-emitting
+      # JSON, because AppVeyor/Config.js is commented and ConfigManager reads it
+      # with ReadCommentHandling.Skip. Round-tripping through a JSON parser would
+      # discard those comments and reformat the file.
+      #
+      # WorldDatabaseUrl comes straight from the input, which is empty in
+      # fixture mode. SqliteConfiguration's default is a non-empty
+      # releases/latest URL, so leaving the key out would make the bootstrapper
+      # download 130MB even when the intent was to self-provision. An empty
+      # value is the documented way to say "build it from the EF model instead".
+      #
+      # The SQLite paths are absolute and shared by every process on the runner.
+      # That is deliberate, and it is also a caveat:
+      # DbProvider.ResolveSqlitePath resolves relative paths against the working
+      # directory, which differs per test project, so relative paths would
+      # silently hand each assembly a private copy of the world database.
+      # Absolute paths route them all at one file.
+      #
+      # The flip side is that this workflow cannot catch that bug itself, because
+      # absolute paths never reach the resolution logic. It is covered by
+      # SqlitePathResolutionTests, which does run in this job. See issues.md item 1.
+      # ---------------------------------------------------------------------
+      - name: Generate Config.js
+        env:
+          WORLD_DB_URL: ${{ inputs.world_url }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, pathlib, re
+
+          config = pathlib.Path("AppVeyor/Config.js").read_text()
+
+          # A directory that exists but holds no .dat files, so the failure mode
+          # of a missing one is not what gets tested.
+          dat_dir = os.path.join(os.environ["RUNNER_TEMP"], "nodats")
+          pathlib.Path(dat_dir).mkdir(parents=True, exist_ok=True)
+          config = re.sub(
+              r'"DatFilesDirectory":\s*"[^"]*"',
+              '"DatFilesDirectory": "%s"' % dat_dir,
+              config,
+          )
+
+          db_dir = os.path.join(os.environ["GITHUB_WORKSPACE"], "db")
+          pathlib.Path(db_dir).mkdir(parents=True, exist_ok=True)
+
+          overlay = "\n".join([
+              '  "Database": {',
+              '    "Provider": "sqlite",',
+              '    "AutoCreate": true,',
+              '    "WorldDatabaseUrl": "%s"' % os.environ["WORLD_DB_URL"],
+              '  },',
+              '  "Sqlite": {',
+              '    "Authentication": { "Database": "%s/ace_auth.db" },' % db_dir,
+              '    "Shard":         { "Database": "%s/ace_shard.db" },' % db_dir,
+              '    "World":         { "Database": "%s/ace_world.db" }' % db_dir,
+              '  },',
+          ])
+
+          # Insert after the first brace, not before it: AppVeyor/Config.js opens
+          # with '{' on line 1, and an overlay placed ahead of that brace would
+          # leave the document starting with a bare key.
+          brace = config.index("{")
+          config = config[:brace + 1] + "\n" + overlay + config[brace + 1:]
+
+          # LandblockPreloading lives inside the Server block, not at the top level.
+          # The runner has no .dat files, so preloading would only produce an error
+          # log (and, before the guard in LandblockManager, a null dereference on a
+          # background thread). Disabling it here keeps the CI boot log clean; the
+          # product guard is what makes it safe, this is what makes it quiet.
+          server_key = '"Server": {'
+          server = config.index(server_key)
+          config = (config[:server + len(server_key)] +
+                    '\n    "LandblockPreloading": false,' +
+                    config[server + len(server_key):])
+
+          dest = pathlib.Path("Source/ACE.Server/Config.js")
+          dest.write_text(config)
+          print("--- generated Config.js (head) ---")
+          print("\n".join(dest.read_text().splitlines()[:12]))
+          PY
+
+      # ---------------------------------------------------------------------
+      # Provision the world database, in release mode only.
+      #
+      # In fixture mode this step does not run and the world database is built
+      # from the EF model by SqliteBootstrapper.EnsureWorldSchema, which is what
+      # auth and shard already do. There is nothing to replay either way, and
+      # that asymmetry with MySQL is the thing under test rather than an
+      # accident: MySQL gets its schema from Database/Create, Database/Base and
+      # Database/Updates/*.sql, while SQLite gets auth and shard from the EF
+      # model and the world database from a release asset.
+      #
+      # The artifact is published with 84 numeric columns declared TEXT
+      # (spell.variance tops out at 99 where a healthy database reaches 800).
+      # NormalizeWorldDatabaseTypes rebuilds them on first open and logs which
+      # tables it touched, so an unrepaired artifact shows up in the log rather
+      # than failing quietly.
+      # ---------------------------------------------------------------------
+      - name: Fetch the published world database
+        if: inputs.world == 'release'
+        env:
+          URL: ${{ inputs.world_url }}
+          SHA256: ${{ inputs.world_sha256 }}
+        run: |
+          set -euo pipefail
+          dest="$GITHUB_WORKSPACE/db/ace_world.db"
+          tmp="$dest.download"
+
+          echo "downloading $URL"
+          curl -fsSL -o "$tmp" "$URL"
+
+          actual=$(sha256sum "$tmp" | cut -d' ' -f1)
+          if [ "$actual" != "$SHA256" ]; then
+            echo "Digest mismatch. expected $SHA256 actual $actual" >&2
+            exit 1
+          fi
+          echo "digest ok: $actual"
+          mv "$tmp" "$dest"
+
+          # Verified locally against this exact digest: fresh directory,
+          # unrepaired file, 99 -> 800, 43,913 weenies, 11/11 green.
+
+      # ---------------------------------------------------------------------
+      # Test
+      #
+      # Only ACE.Database.Tests. Its classes do not bootstrap TestEnvironment,
+      # so it needs no .dat files -- which is what makes this runnable at all.
+      #
+      # ACE.Server.Tests cannot be run unfiltered: TestEnvironment.Initialize
+      # mirrors Program.cs and ends in WorldManager.Initialize, which starts the
+      # "World Manager" thread. That thread calls PreloadConfigLandblocks, whose
+      # Landblock constructor reads DatManager.CellDat -- null when no .dat files
+      # were loaded. The unhandled NullReferenceException takes the whole test
+      # host down, so the run aborts before reporting anything:
+      #
+      #   Test host process crashed : Unhandled exception.
+      #   System.NullReferenceException
+      #     at ACE.Server.Entity.Landblock..ctor(LandblockId id)  Landblock.cs:174
+      #     at LandblockManager.PreloadConfigLandblocks()         LandblockManager.cs:127
+      #     at WorldManager.<>c.<Initialize>b__15_0()             WorldManager.cs:60
+      #
+      # Three of its five classes do not call TestEnvironment and pass without
+      # .dat files, so they are runnable under a filter -- but see the caveat in
+      # the caller's footer before treating that as coverage of the SQLite path.
+      #
+      # What the suite under test actually covers, checked against the test
+      # sources rather than assumed: the provider switch itself, the
+      # cross-provider collation fix (GetWeenie by name is the .ToLower()
+      # comparison MySQL's CI collation used to satisfy for free), the pragma
+      # interceptor, the world-database self-provisioning, and a weenie lookup by
+      # id and by name. That is the part of the branch a second backend could
+      # plausibly regress.
+      #
+      # Two things it does NOT cover, which earlier drafts of this comment
+      # claimed and were wrong about:
+      #   * GetSequenceGaps. Nothing in this project references it. The
+      #     differential that validated it was a local exercise, not a test.
+      #   * NormalizeWorldDatabaseTypes runs in release mode but nothing asserts
+      #     on what it did.
+      #
+      # -p:Platform=x64 has to match the build. With no flag, dotnet test looks
+      # in bin/Release while the build emitted bin/x64/Release, and the test
+      # helpers' hard-coded five-level walk up to ACE.Server then overshoots to
+      # the repository root. See issues.md item 2a.
+      # ---------------------------------------------------------------------
+      - name: Test
+        run: |
+          dotnet test Source/ACE.Database.Tests/ACE.Database.Tests.csproj \
+            -c Release -p:Platform=x64 --no-build \
+            --logger "trx;LogFileName=database.trx" \
+            --results-directory "$RUNNER_TEMP/results"
+
+      # The account tests share one account and delete it in ClassCleanup. A
+      # leftover row means cleanup did not run, which would make the next run
+      # fail on the unique name -- a real failure, not a flake, but one that only
+      # shows up on a second run against the same database.
+      - name: Assert the auth database was left clean
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sqlite3
+          db = os.path.join(os.environ["GITHUB_WORKSPACE"], "db", "ace_auth.db")
+          c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+          count = c.execute("SELECT COUNT(*) FROM account").fetchone()[0]
+          c.close()
+          if count != 0:
+              raise SystemExit("Auth left with %d account(s); a test did not clean up." % count)
+          print("auth clean (account=%d)" % count)
+          PY
+
+      # Proves the mode really did source the world database the way it claims
+      # to. Cheap, and it turns "the tests passed" into "the tests passed against
+      # the world database this run was supposed to be using" -- otherwise a
+      # release run that silently fell back to a fixture would still be green.
+      - name: Assert the world database was provisioned
+        env:
+          WORLD: ${{ inputs.world }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sqlite3
+          db = os.path.join(os.environ["GITHUB_WORKSPACE"], "db", "ace_world.db")
+          c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+          tables = c.execute(
+              "SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+              "AND name NOT LIKE 'sqlite_%'").fetchone()[0]
+          weenies = c.execute("SELECT COUNT(*) FROM weenie").fetchone()[0]
+          c.close()
+
+          mode = os.environ["WORLD"]
+          print("%s: %d tables, %d weenies" % (mode, tables, weenies))
+
+          if tables < 54:
+              raise SystemExit("World database has %d tables; the EF model defines 54." % tables)
+
+          if mode == "fixture" and weenies != 1:
+              raise SystemExit(
+                  "Fixture mode should hold exactly the 1 seeded weenie, found %d. "
+                  "Something else wrote to it." % weenies)
+
+          if mode == "release" and weenies < 40000:
+              raise SystemExit(
+                  "Release mode should hold the full world database, found %d weenies. "
+                  "The artifact is truncated or was not the one that was pinned." % weenies)
+          PY
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ inputs.world }}
+          path: ${{ runner.temp }}/results
+          if-no-files-found: ignore
+
+      - name: Upload the SQLite databases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Keeping the world database means a failed run can be investigated
+          # without re-fetching it, and in release mode whether the bootstrapper
+          # repaired the types is visible by diffing the schema against the
+          # published artifact.
+          name: sqlite-databases-${{ inputs.world }}
+          path: ${{ github.workspace }}/db
+          if-no-files-found: ignore
+          retention-days: 7

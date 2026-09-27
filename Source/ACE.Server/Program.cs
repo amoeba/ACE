@@ -14,6 +14,7 @@ using ACE.Common.Extensions;
 using ACE.Database;
 using ACE.DatLoader;
 using ACE.Server.Command;
+using ACE.Server.DatabaseUpdate;
 using ACE.Server.Managers;
 using ACE.Server.Mods;
 using ACE.Server.Network.Managers;
@@ -154,6 +155,12 @@ namespace ACE.Server
             log.Info("Initializing ConfigManager...");
             ConfigManager.Initialize();
 
+            // The provider is only known once ConfigManager has run. Materialise the
+            // SQLite files here, ahead of the offline maintenance block below, which
+            // queries the shard schema before DatabaseManager.Initialize() is reached.
+            // No-op when the provider is MySQL.
+            ACE.Database.SqliteBootstrapper.EnsureDatabases();
+
             log.Info("Initializing ModManager...");
             ModManager.Initialize();
 
@@ -203,20 +210,45 @@ namespace ACE.Server
             else
                 log.Info($"AutoServerVersionCheck is disabled...");
 
-            if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase)
+            // Which backend is in use decides both how the databases were provisioned
+            // and whether the update pipelines below can run. See
+            // DatabaseUpdate/IDatabaseUpdateProvider for why SQLite has no
+            // implementation, and SqliteBootstrapper for how it provisions instead.
+            if (DbProvider.IsSqlite)
             {
-                CheckForWorldDatabaseUpdate();
-
-                if (ConfigManager.Config.Offline.AutoApplyWorldCustomizations)
-                    AutoApplyWorldCustomizations();
+                log.Info("Database provider is SQLite. This is intended for local development and");
+                log.Info("private test worlds; MySQL remains the supported target for public shards.");
             }
-            else
-                log.Info($"AutoUpdateWorldDatabase is disabled...");
 
-            if (ConfigManager.Config.Offline.AutoApplyDatabaseUpdates)
-                AutoApplyDatabaseUpdates();
-            else
-                log.Info($"AutoApplyDatabaseUpdates is disabled...");
+            var dbUpdates = DatabaseUpdates.Active;
+
+            if (dbUpdates.IsSupported)
+            {
+                if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase)
+                {
+                    dbUpdates.CheckForWorldDatabaseUpdate();
+
+                    if (ConfigManager.Config.Offline.AutoApplyWorldCustomizations)
+                        dbUpdates.AutoApplyWorldCustomizations();
+                }
+                else
+                    log.Info($"AutoUpdateWorldDatabase is disabled...");
+
+                if (ConfigManager.Config.Offline.AutoApplyDatabaseUpdates)
+                    dbUpdates.AutoApplyDatabaseUpdates();
+                else
+                    log.Info($"AutoApplyDatabaseUpdates is disabled...");
+            }
+            else if (ConfigManager.Config.Offline.AutoUpdateWorldDatabase
+                  || ConfigManager.Config.Offline.AutoApplyWorldCustomizations
+                  || ConfigManager.Config.Offline.AutoApplyDatabaseUpdates)
+            {
+                // Only worth saying when the operator actually asked for one of the
+                // pipelines. Reporting it unconditionally would be noise on a server
+                // that had them switched off already.
+                foreach (var line in dbUpdates.UnsupportedReason)
+                    log.Warn(line);
+            }
 
             // This should only be enabled manually. To enable it, simply uncomment this line
             //ACE.Database.OfflineTools.Shard.BiotaGuidConsolidator.ConsolidateBiotaGuids(0xA0000000, true, false, out int numberOfBiotasConsolidated, out int numberOfBiotasSkipped, out int numberOfErrors);

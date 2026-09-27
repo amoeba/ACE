@@ -17,8 +17,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The pragma interceptor is internal; the tests assert that it refuses to
+         leave a connection in an unverified state, which needs direct access. -->
+    <InternalsVisibleTo Include="ACE.Database.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="log4net" Version="2.0.17" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.20" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.20" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
   </ItemGroup>
 

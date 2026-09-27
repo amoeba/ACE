@@ -180,6 +180,74 @@
       "EnableSensitiveDataLogging": false
     }
   },
+  // Which database backend to use.
+  //
+  // "mysql" (the default) is the supported target for public and private shards.
+  // It uses the MySql section above and behaves exactly as it always has.
+  //
+  // "sqlite" is an optional alternative intended for local development and
+  // private test worlds. It needs no database server, which makes it convenient
+  // for working on ACE itself, but it is not a supported substitute for MySQL on
+  // a shard players care about. Specifically, on SQLite:
+  //
+  //   - the automatic database update and world database update pipelines below
+  //     are MySQL-only. Leave their flags on and the boot log says why they did
+  //     not run, so a long-running world will drift behind the MySql scripts in
+  //     Database/Updates as ACE is upgraded;
+  //   - there is no replication and no point-in-time recovery;
+  //   - the world database is a pre-converted artifact, not one built from the
+  //     .dat files, so it can lag the first-party world release.
+  //
+  // Those are reasons to use MySQL for anything public, not performance reasons.
+  //
+  // Relative paths are resolved from the directory holding Config.js and the ACE
+  // executable, not the working directory, so the files do not move when ACE is
+  // launched from somewhere else. They must end in .db.
+  //
+  // On first run with provider "sqlite", ACE creates all three schemas from its
+  // own EF model, then downloads the world database (about 130MB) from
+  // WorldDatabaseUrl and repairs the numeric column types the conversion
+  // declared as TEXT.
+  "Database": {
+    "Provider": "mysql",
+    // On startup, create any missing schemas and fetch the world database if the
+    // file is missing. Set to false to manage the files yourself.
+    "AutoCreate": true,
+    // Pre-converted SQLite world database, produced by amoeba/ace-to-sqlite.
+    //
+    // Set to "" to build the world schema from the EF model instead of
+    // downloading anything. That yields a structurally complete but empty
+    // database: correct tables and column types, no weenies, so a server will
+    // boot and then fail every weenie lookup. It is enough to exercise queries
+    // and the test suite, and nothing more.
+    "WorldDatabaseUrl": "https://github.com/amoeba/ace-to-sqlite/releases/download/latest/ace_world_patches.db"
+  },
+  // Only read when Provider is "sqlite".
+  "Sqlite": {
+    "Authentication": {
+      "Database": "db/ace_auth.db"
+    },
+    "Shard": {
+      "Database": "db/ace_shard.db"
+    },
+    "World": {
+      "Database": "db/ace_world.db"
+    },
+    // Connection-level pragmas applied to every connection. All optional; the
+    // defaults are what the backend is validated against.
+    // synchronous: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA. NORMAL is safe against
+    // application crashes and only risks the last few transactions on OS or power
+    // failure. Set to 2 (FULL) if you would rather not lose writes to a closed lid.
+    "Synchronous": 1,
+    // cache_size in KiB when negative. Bounds the read working set.
+    "CacheSize": -2000,
+    // journal_size_limit in bytes. Bounds how far the write-ahead log can grow
+    // before a checkpoint truncates it. -1 for no limit.
+    "JournalSizeLimit": 104857600,
+    // Stamped into each database via PRAGMA user_version on creation and read back
+    // on startup, so a db/ directory records which schema version it is at.
+    "SchemaVersion": 1
+  },
   // This section can trigger events that may happen before the world starts up, or after it shuts down
   // The shard should be in a disconnected state from any running ACE world
   "Offline": {

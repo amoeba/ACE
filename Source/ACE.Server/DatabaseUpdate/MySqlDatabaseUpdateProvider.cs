@@ -6,13 +6,36 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 
+using log4net;
+
 using ACE.Common;
 
-namespace ACE.Server
+namespace ACE.Server.DatabaseUpdate
 {
-    partial class Program
+    /// <summary>
+    /// The automatic database update pipelines against MySQL / MariaDB, through
+    /// <c>MySqlConnector</c> and the <c>Database/Updates</c> scripts.
+    /// </summary>
+    /// <remarks>
+    /// This is the original behaviour, unchanged. The methods mix
+    /// <see cref="log"/>4net and <see cref="Console"/> deliberately: the pipelines
+    /// run unattended at startup, but they are also the visible progress output of
+    /// the out-of-box setup, which prints a dot per script and is expected to look
+    /// the way it always has.
+    /// </remarks>
+    public sealed class MySqlDatabaseUpdateProvider : IDatabaseUpdateProvider
     {
-        private static void CheckForWorldDatabaseUpdate()
+        private static readonly ILog log = LogManager.GetLogger(System.Reflection.MethodBase.GetCurrentMethod().DeclaringType);
+
+        public static readonly MySqlDatabaseUpdateProvider Instance = new MySqlDatabaseUpdateProvider();
+
+        private MySqlDatabaseUpdateProvider() { }
+
+        public bool IsSupported => true;
+
+        public IReadOnlyList<string> UnsupportedReason => Array.Empty<string>();
+
+        public void CheckForWorldDatabaseUpdate()
         {
             log.Info($"Automatic World Database Update started...");
             try
@@ -67,11 +90,166 @@ namespace ACE.Server
             log.Info($"Automatic World Database Update complete.");
         }
 
+        public void AutoApplyWorldCustomizations()
+        {
+            var content_folders_search_option = ConfigManager.Config.Offline.RecurseWorldCustomizationPaths ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            var content_folders = new List<string> { GetContentFolder() };
+            content_folders.AddRange(ConfigManager.Config.Offline.WorldCustomizationAddedPaths);
+            content_folders.Sort();
+
+            Console.WriteLine($"Searching for World Customization SQL scripts .... ");
+
+            content_folders.ForEach(path =>
+            {
+                var contentDI = new DirectoryInfo(path);
+                if (contentDI.Exists)
+                {
+                    Console.WriteLine($"Searching for SQL files within {path} .... ");
+
+                    var sqlConnect = new MySqlConnector.MySqlConnection($"server={ConfigManager.Config.MySql.World.Host};port={ConfigManager.Config.MySql.World.Port};user={ConfigManager.Config.MySql.World.Username};password={ConfigManager.Config.MySql.World.Password};database={ConfigManager.Config.MySql.World.Database};{ConfigManager.Config.MySql.World.ConnectionOptions}");
+                    foreach (var file in contentDI.GetFiles("*.sql", content_folders_search_option).OrderBy(f => f.FullName))
+                    {
+                        Console.Write($"Found {file.FullName} .... ");
+                        var sqlDBFile = File.ReadAllText(file.FullName);
+                        sqlDBFile = sqlDBFile.Replace("ace_world", ConfigManager.Config.MySql.World.Database);
+                        var script = new MySqlConnector.MySqlCommand(sqlDBFile, sqlConnect);
+
+                        Console.Write($"Importing into World database on SQL server at {ConfigManager.Config.MySql.World.Host}:{ConfigManager.Config.MySql.World.Port} .... ");
+                        try
+                        {
+                            Program.ExecuteScript(script);
+                            //Console.Write($" {count} database records affected ....");
+                            Console.WriteLine(" complete!");
+                        }
+                        catch (MySqlConnector.MySqlException ex)
+                        {
+                            Console.WriteLine($" error!");
+                            Console.WriteLine($" Unable to apply patch due to following exception: {ex}");
+                        }
+                    }
+                    Program.CleanupConnection(sqlConnect);
+                }
+            });
+
+            Console.WriteLine($"World Customization SQL scripts import complete!");
+        }
+
+        public void AutoApplyDatabaseUpdates()
+        {
+            log.Info($"Automatic Database Patching started...");
+            Thread.Sleep(1000);
+
+            PatchDatabase("Authentication", ConfigManager.Config.MySql.Authentication.Host, ConfigManager.Config.MySql.Authentication.Port, ConfigManager.Config.MySql.Authentication.Username, ConfigManager.Config.MySql.Authentication.Password, ConfigManager.Config.MySql.Authentication.Database, ConfigManager.Config.MySql.Shard.Database, ConfigManager.Config.MySql.World.Database);
+            PatchDatabase("Shard", ConfigManager.Config.MySql.Shard.Host, ConfigManager.Config.MySql.Shard.Port, ConfigManager.Config.MySql.Shard.Username, ConfigManager.Config.MySql.Shard.Password, ConfigManager.Config.MySql.Authentication.Database, ConfigManager.Config.MySql.Shard.Database, ConfigManager.Config.MySql.World.Database);
+            PatchDatabase("World", ConfigManager.Config.MySql.World.Host, ConfigManager.Config.MySql.World.Port, ConfigManager.Config.MySql.World.Username, ConfigManager.Config.MySql.World.Password, ConfigManager.Config.MySql.Authentication.Database, ConfigManager.Config.MySql.Shard.Database, ConfigManager.Config.MySql.World.Database);
+
+            Thread.Sleep(1000);
+            log.Info($"Automatic Database Patching complete.");
+        }
+
+        /// <summary>
+        /// Applies every script in <c>Database/Updates/{dbType}</c> that is not yet
+        /// listed in the applied ledger, oldest filename first.
+        /// </summary>
+        /// <remarks>
+        /// Also called by the out-of-box setup, which is why it is static and takes
+        /// its connection details as arguments rather than reading them from config
+        /// the way <see cref="AutoApplyDatabaseUpdates"/> does.
+        /// <para>Note that a script is added to the ledger whether or not it applied
+        /// cleanly. That is pre-existing behaviour and it is what makes the ledger
+        /// mean "we have seen this script" rather than "this script succeeded"; a
+        /// script that failed once is not retried on the next boot.</para>
+        /// </remarks>
+        public static void PatchDatabase(string dbType, string host, uint port, string username, string password, string authDB, string shardDB, string worldDB)
+        {
+            var updatesPath = $"DatabaseSetupScripts{Path.DirectorySeparatorChar}Updates{Path.DirectorySeparatorChar}{dbType}";
+            var updatesFile = $"{updatesPath}{Path.DirectorySeparatorChar}applied_updates.txt";
+
+            if (!Directory.Exists(updatesPath))
+            {
+                // File not found in Environment.CurrentDirectory
+                // Lets try the ExecutingAssembly Location
+                var executingAssemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
+
+                var directoryName = Path.GetFullPath(Path.GetDirectoryName(executingAssemblyLocation));
+
+                updatesPath = Path.Combine(directoryName, $"DatabaseSetupScripts{Path.DirectorySeparatorChar}Updates{Path.DirectorySeparatorChar}{dbType}");
+
+                if (!Directory.Exists(updatesPath))
+                {
+                    Console.WriteLine($" error!");
+                    Console.WriteLine($" Unable to locate updates directory");
+                }
+                else
+                {
+                    updatesFile = $"{updatesPath}{Path.DirectorySeparatorChar}applied_updates.txt";
+                }
+
+            }
+
+            var appliedUpdates = Array.Empty<string>();
+
+            var containerUpdatesFile = $"/ace/Config/{dbType}_applied_updates.txt";
+            if (Program.IsRunningInContainer && File.Exists(containerUpdatesFile))
+                File.Copy(containerUpdatesFile, updatesFile, true);
+
+            if (File.Exists(updatesFile))
+                appliedUpdates = File.ReadAllLines(updatesFile);
+
+            Console.WriteLine($"Searching for {dbType} update SQL scripts .... ");
+            foreach (var file in new DirectoryInfo(updatesPath).GetFiles("*.sql").OrderBy(f => f.Name))
+            {
+                if (appliedUpdates.Contains(file.Name))
+                    continue;
+
+                Console.Write($"Found {file.Name} .... ");
+                var sqlDBFile = File.ReadAllText(file.FullName);
+                var database = "";
+                switch (dbType)
+                {
+                    case "Authentication":
+                        database = authDB;
+                        break;
+                    case "Shard":
+                        database = shardDB;
+                        break;
+                    case "World":
+                        database = worldDB;
+                        break;
+                }
+                var sqlConnect = new MySqlConnector.MySqlConnection($"server={host};port={port};user={username};password={password};database={database};DefaultCommandTimeout=120;SslMode=None;AllowPublicKeyRetrieval=true");
+                sqlDBFile = sqlDBFile.Replace("ace_auth", authDB);
+                sqlDBFile = sqlDBFile.Replace("ace_shard", shardDB);
+                sqlDBFile = sqlDBFile.Replace("ace_world", worldDB);
+                var script = new MySqlConnector.MySqlCommand(sqlDBFile, sqlConnect);
+
+                Console.Write($"Importing into {database} database on SQL server at {host}:{port} .... ");
+                try
+                {
+                    Program.ExecuteScript(script);
+                    //Console.Write($" {count} database records affected ....");
+                    Console.WriteLine(" complete!");
+                }
+                catch (MySqlConnector.MySqlException ex)
+                {
+                    Console.WriteLine($" error!");
+                    Console.WriteLine($" Unable to apply patch due to following exception: {ex}");
+                }
+                File.AppendAllText(updatesFile, file.Name + Environment.NewLine);
+                Program.CleanupConnection(sqlConnect);
+            }
+
+            if (Program.IsRunningInContainer && File.Exists(updatesFile))
+                File.Copy(updatesFile, containerUpdatesFile, true);
+
+            Console.WriteLine($"{dbType} update SQL scripts import complete!");
+        }
+
         private static void UpdateToLatestWorldDatabase(string dbURL, string dbFileName)
         {
             Console.WriteLine();
 
-            if (IsRunningInContainer)
+            if (Program.IsRunningInContainer)
             {
                 Console.WriteLine(" ");
                 Console.WriteLine("This process will take a while, depending on many factors, and may look stuck while reading and importing the world database, please be patient! ");
@@ -121,7 +299,7 @@ namespace ACE.Server
                         var script = new MySqlConnector.MySqlCommand(completeSQLline, sqlConnect);
                         try
                         {
-                            ExecuteScript(script);
+                            Program.ExecuteScript(script);
                         }
                         catch (MySqlConnector.MySqlException)
                         {
@@ -132,7 +310,7 @@ namespace ACE.Server
                     else
                         completeSQLline += line + Environment.NewLine;
                 }
-                CleanupConnection(sqlConnect);
+                Program.CleanupConnection(sqlConnect);
             }
             Console.WriteLine(" complete!");
 
@@ -174,148 +352,6 @@ namespace ACE.Server
             }
 
             return content_folder;
-        }
-
-        private static void AutoApplyWorldCustomizations()
-        {
-            var content_folders_search_option = ConfigManager.Config.Offline.RecurseWorldCustomizationPaths ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            var content_folders = new List<string> { GetContentFolder() };
-            content_folders.AddRange(ConfigManager.Config.Offline.WorldCustomizationAddedPaths);
-            content_folders.Sort();
-
-            Console.WriteLine($"Searching for World Customization SQL scripts .... ");
-
-            content_folders.ForEach(path =>
-            {
-                var contentDI = new DirectoryInfo(path);
-                if (contentDI.Exists)
-                {
-                    Console.WriteLine($"Searching for SQL files within {path} .... ");
-
-                    var sqlConnect = new MySqlConnector.MySqlConnection($"server={ConfigManager.Config.MySql.World.Host};port={ConfigManager.Config.MySql.World.Port};user={ConfigManager.Config.MySql.World.Username};password={ConfigManager.Config.MySql.World.Password};database={ConfigManager.Config.MySql.World.Database};{ConfigManager.Config.MySql.World.ConnectionOptions}");
-                    foreach (var file in contentDI.GetFiles("*.sql", content_folders_search_option).OrderBy(f => f.FullName))
-                    {
-                        Console.Write($"Found {file.FullName} .... ");
-                        var sqlDBFile = File.ReadAllText(file.FullName);
-                        sqlDBFile = sqlDBFile.Replace("ace_world", ConfigManager.Config.MySql.World.Database);
-                        var script = new MySqlConnector.MySqlCommand(sqlDBFile, sqlConnect);
-
-                        Console.Write($"Importing into World database on SQL server at {ConfigManager.Config.MySql.World.Host}:{ConfigManager.Config.MySql.World.Port} .... ");
-                        try
-                        {
-                            ExecuteScript(script);
-                            //Console.Write($" {count} database records affected ....");
-                            Console.WriteLine(" complete!");
-                        }
-                        catch (MySqlConnector.MySqlException ex)
-                        {
-                            Console.WriteLine($" error!");
-                            Console.WriteLine($" Unable to apply patch due to following exception: {ex}");
-                        }
-                    }
-                    CleanupConnection(sqlConnect);
-                }
-            });
-
-            Console.WriteLine($"World Customization SQL scripts import complete!");
-        }
-
-        private static void AutoApplyDatabaseUpdates()
-        {
-            log.Info($"Automatic Database Patching started...");
-            Thread.Sleep(1000);
-
-            PatchDatabase("Authentication", ConfigManager.Config.MySql.Authentication.Host, ConfigManager.Config.MySql.Authentication.Port, ConfigManager.Config.MySql.Authentication.Username, ConfigManager.Config.MySql.Authentication.Password, ConfigManager.Config.MySql.Authentication.Database, ConfigManager.Config.MySql.Shard.Database, ConfigManager.Config.MySql.World.Database);
-            PatchDatabase("Shard", ConfigManager.Config.MySql.Shard.Host, ConfigManager.Config.MySql.Shard.Port, ConfigManager.Config.MySql.Shard.Username, ConfigManager.Config.MySql.Shard.Password, ConfigManager.Config.MySql.Authentication.Database, ConfigManager.Config.MySql.Shard.Database, ConfigManager.Config.MySql.World.Database);
-            PatchDatabase("World", ConfigManager.Config.MySql.World.Host, ConfigManager.Config.MySql.World.Port, ConfigManager.Config.MySql.World.Username, ConfigManager.Config.MySql.World.Password, ConfigManager.Config.MySql.Authentication.Database, ConfigManager.Config.MySql.Shard.Database, ConfigManager.Config.MySql.World.Database);
-
-            Thread.Sleep(1000);
-            log.Info($"Automatic Database Patching complete.");
-        }
-
-        private static void PatchDatabase(string dbType, string host, uint port, string username, string password, string authDB, string shardDB, string worldDB)
-        {
-            var updatesPath = $"DatabaseSetupScripts{Path.DirectorySeparatorChar}Updates{Path.DirectorySeparatorChar}{dbType}";
-            var updatesFile = $"{updatesPath}{Path.DirectorySeparatorChar}applied_updates.txt";
-
-            if (!Directory.Exists(updatesPath))
-            {
-                // File not found in Environment.CurrentDirectory
-                // Lets try the ExecutingAssembly Location
-                var executingAssemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
-
-                var directoryName = Path.GetFullPath(Path.GetDirectoryName(executingAssemblyLocation));
-
-                updatesPath = Path.Combine(directoryName, $"DatabaseSetupScripts{Path.DirectorySeparatorChar}Updates{Path.DirectorySeparatorChar}{dbType}");
-
-                if (!Directory.Exists(updatesPath))
-                {
-                    Console.WriteLine($" error!");
-                    Console.WriteLine($" Unable to locate updates directory");
-                }
-                else
-                {
-                    updatesFile = $"{updatesPath}{Path.DirectorySeparatorChar}applied_updates.txt";
-                }
-
-            }
-
-            var appliedUpdates = Array.Empty<string>();
-
-            var containerUpdatesFile = $"/ace/Config/{dbType}_applied_updates.txt";
-            if (IsRunningInContainer && File.Exists(containerUpdatesFile))
-                File.Copy(containerUpdatesFile, updatesFile, true);
-
-            if (File.Exists(updatesFile))
-                appliedUpdates = File.ReadAllLines(updatesFile);
-
-            Console.WriteLine($"Searching for {dbType} update SQL scripts .... ");
-            foreach (var file in new DirectoryInfo(updatesPath).GetFiles("*.sql").OrderBy(f => f.Name))
-            {
-                if (appliedUpdates.Contains(file.Name))
-                    continue;
-
-                Console.Write($"Found {file.Name} .... ");
-                var sqlDBFile = File.ReadAllText(file.FullName);
-                var database = "";
-                switch (dbType)
-                {
-                    case "Authentication":
-                        database = authDB;
-                        break;
-                    case "Shard":
-                        database = shardDB;
-                        break;
-                    case "World":
-                        database = worldDB;
-                        break;
-                }
-                var sqlConnect = new MySqlConnector.MySqlConnection($"server={host};port={port};user={username};password={password};database={database};DefaultCommandTimeout=120;SslMode=None;AllowPublicKeyRetrieval=true");
-                sqlDBFile = sqlDBFile.Replace("ace_auth", authDB);
-                sqlDBFile = sqlDBFile.Replace("ace_shard", shardDB);
-                sqlDBFile = sqlDBFile.Replace("ace_world", worldDB);
-                var script = new MySqlConnector.MySqlCommand(sqlDBFile, sqlConnect);
-
-                Console.Write($"Importing into {database} database on SQL server at {host}:{port} .... ");
-                try
-                {
-                    ExecuteScript(script);
-                    //Console.Write($" {count} database records affected ....");
-                    Console.WriteLine(" complete!");
-                }
-                catch (MySqlConnector.MySqlException ex)
-                {
-                    Console.WriteLine($" error!");
-                    Console.WriteLine($" Unable to apply patch due to following exception: {ex}");
-                }
-                File.AppendAllText(updatesFile, file.Name + Environment.NewLine);
-                CleanupConnection(sqlConnect);
-            }
-
-            if (IsRunningInContainer && File.Exists(updatesFile))
-                File.Copy(updatesFile, containerUpdatesFile, true);
-
-            Console.WriteLine($"{dbType} update SQL scripts import complete!");
         }
     }
 }

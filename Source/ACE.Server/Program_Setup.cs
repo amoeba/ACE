@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 
 using ACE.Common;
+using ACE.Server.DatabaseUpdate;
 
 namespace ACE.Server
 {
@@ -449,11 +450,11 @@ namespace ACE.Server
 
                 Console.WriteLine("Searching for Update SQL scripts .... ");
 
-                PatchDatabase("Authentication", config.MySql.Authentication.Host, config.MySql.Authentication.Port, config.MySql.Authentication.Username, config.MySql.Authentication.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
+                MySqlDatabaseUpdateProvider.PatchDatabase("Authentication", config.MySql.Authentication.Host, config.MySql.Authentication.Port, config.MySql.Authentication.Username, config.MySql.Authentication.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
 
-                PatchDatabase("Shard", config.MySql.Shard.Host, config.MySql.Shard.Port, config.MySql.Shard.Username, config.MySql.Shard.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
+                MySqlDatabaseUpdateProvider.PatchDatabase("Shard", config.MySql.Shard.Host, config.MySql.Shard.Port, config.MySql.Shard.Username, config.MySql.Shard.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
 
-                PatchDatabase("World", config.MySql.World.Host, config.MySql.World.Port, config.MySql.World.Username, config.MySql.World.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
+                MySqlDatabaseUpdateProvider.PatchDatabase("World", config.MySql.World.Host, config.MySql.World.Port, config.MySql.World.Username, config.MySql.World.Password, config.MySql.Authentication.Database, config.MySql.Shard.Database, config.MySql.World.Database);
             }
 
             Console.WriteLine();
@@ -547,7 +548,12 @@ namespace ACE.Server
             Console.WriteLine("exiting setup for ACEmulator.");
         }
 
-        private static void ExecuteScript(MySqlConnector.MySqlCommand scriptCommand)
+        /// <summary>
+        /// The single copy of this, shared with <see cref="MySqlDatabaseUpdateProvider"/>,
+        /// which does the same thing for the update scripts. Both callers want the
+        /// dot-per-script progress output, which is why this prints rather than logs.
+        /// </summary>
+        internal static void ExecuteScript(MySqlConnector.MySqlCommand scriptCommand)
         {
             if (scriptCommand.Connection.State != System.Data.ConnectionState.Open)
             {
@@ -557,7 +563,12 @@ namespace ACE.Server
             Console.Write(".");
         }
 
-        private static void CleanupConnection(MySqlConnector.MySqlConnection connection)
+        /// <summary>
+        /// Shared with <see cref="MySqlDatabaseUpdateProvider"/>. A failure to close
+        /// is deliberately swallowed; the connection is about to be discarded either
+        /// way, and the caller has already reported whatever it was doing.
+        /// </summary>
+        internal static void CleanupConnection(MySqlConnector.MySqlConnection connection)
         {
             if (connection.State != System.Data.ConnectionState.Closed)
             {

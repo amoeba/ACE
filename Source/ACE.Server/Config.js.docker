@@ -182,6 +182,38 @@
       "EnableSensitiveDataLogging": false
     }
   },
+  // Which database backend to use: "mysql" (default) or "sqlite". The MySql
+  // section below applies when Provider is "mysql"; the Sqlite section applies
+  // when it is "sqlite". This file ships as "mysql" because the container is
+  // wired to the ace-db service -- change Provider to "sqlite" to use the
+  // embedded backend instead, and add a volume for the .db files (see
+  // docker-compose.yml) or they will be lost on restart.
+  "Database": {
+    "Provider": "mysql",
+    "AutoCreate": true,
+    // Only read by the sqlite provider. Where to fetch the pre-converted world
+    // database from when the local file is missing. Set to "" to build the world
+    // schema from the EF model instead of downloading it.
+    "WorldDatabaseUrl": "https://github.com/amoeba/ace-to-sqlite/releases/download/latest/ace_world_patches.db"
+  },
+  // Only read when Provider is "sqlite". Relative paths resolve against the
+  // directory holding the executable, which in this image is /ace.
+  "Sqlite": {
+    "Authentication": {
+      "Database": "db/ace_auth.db"
+    },
+    "Shard": {
+      "Database": "db/ace_shard.db"
+    },
+    "World": {
+      "Database": "db/ace_world.db"
+    },
+    // Connection-level pragmas, applied to every connection. All optional.
+    "Synchronous": 1,
+    "CacheSize": -2000,
+    "JournalSizeLimit": 104857600,
+    "SchemaVersion": 1
+  },
   // This section can trigger events that may happen before the world starts up, or after it shuts down
   // The shard should be in a disconnected state from any running ACE world
   "Offline": {

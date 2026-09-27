@@ -12,7 +12,24 @@ namespace ACE.DatLoader.Tests
     [TestClass]
     public class DatTests
     {
-        private static string DAT_PATH = @"C:\Turbine\Asheron's Call\";
+        /// <summary>
+        /// Where the client .dat files live. This project only references
+        /// ACE.DatLoader, so it cannot read Server.DatFilesDirectory out of
+        /// ConfigManager; point ACE_DAT_PATH at the directory instead. The default
+        /// is unchanged for a standard Windows install.
+        /// </summary>
+        private static string DAT_PATH = NormalizePath(
+            Environment.GetEnvironmentVariable("ACE_DAT_PATH") ?? @"C:\Turbine\Asheron's Call\");
+
+        private static string NormalizePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return path;
+
+            return path.EndsWith(Path.DirectorySeparatorChar) || path.EndsWith(Path.AltDirectorySeparatorChar)
+                ? path
+                : path + Path.DirectorySeparatorChar;
+        }
 
         private static string cellDatLocation = DAT_PATH + "client_cell_1.dat";
         private static int expectedCellDatFileCount = 805003;

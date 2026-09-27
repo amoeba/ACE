@@ -21,7 +21,7 @@ namespace ACE.Database
 
         public bool Exists(bool retryUntilFound)
         {
-            var config = Common.ConfigManager.Config.MySql.Authentication;
+            var target = DatabaseManager.DescribeTarget(DatabaseKind.Authentication);
 
             for (; ; )
             {
@@ -29,12 +29,12 @@ namespace ACE.Database
                 {
                     if (((RelationalDatabaseCreator)context.Database.GetService<IDatabaseCreator>()).Exists())
                     {
-                        log.InfoFormat("[DATABASE] Successfully connected to {0} database on {1}:{2}.", config.Database, config.Host, config.Port);
+                        log.InfoFormat("[DATABASE] Successfully connected to {0}.", target);
                         return true;
                     }
                 }
 
-                log.Error($"[DATABASE] Attempting to reconnect to {config.Database} database on {config.Host}:{config.Port} in 5 seconds...");
+                log.Error($"[DATABASE] Attempting to reconnect to {target} in 5 seconds...");
 
                 if (retryUntilFound)
                     Thread.Sleep(5000);
@@ -95,7 +95,8 @@ namespace ACE.Database
             {
                 return context.Account
                     .AsNoTracking()
-                    .FirstOrDefault(r => r.AccountName == accountName);
+                    // case-insensitive on purpose: MySQL collations are CI, SQLite's = is not
+                    .FirstOrDefault(r => r.AccountName.ToLower() == accountName.ToLower());
             }
         }
 
@@ -108,7 +109,8 @@ namespace ACE.Database
             {
                 var result = context.Account
                     .AsNoTracking()
-                    .FirstOrDefault(r => r.AccountName == accountName);
+                    // case-insensitive on purpose: MySQL collations are CI, SQLite's = is not
+                    .FirstOrDefault(r => r.AccountName.ToLower() == accountName.ToLower());
 
                 return (result != null) ? result.AccountId : 0;
             }
